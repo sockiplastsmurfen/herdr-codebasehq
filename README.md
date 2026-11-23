@@ -15,14 +15,15 @@ in the right-hand panel next to Files and Changes.
   with initials. Age is on the right. The **copy icon** copies `#<id> <title>`, the **arrow icon** shows
   the ticket in the browser. The **reload** icon reloads (it also reloads every 2 minutes).
 - **Filter** with the buttons above the list: resolution (Open, Closed, Open and closed),
-  Assignee, Status, Priority, Category and Type. Pick several values in one filter; **Any**
+  Assignee, Status, Priority, Category, Type and Milestone (finished milestones too, marked done). Pick several values in one filter; **Any**
   clears it, **Reset** goes back to the default `assignee:me resolution:open`. The filter is
   sent to Codebase as a search (e.g. `assignee:me status:"In Progress",New resolution:open`)
   and remembered per project. The list loads 60 tickets at a time; **Load more** at the
   bottom gets the next 60 (closed tickets can run into the thousands).
 - **Click a ticket's title** to see the whole ticket in a pane beside it: every field and
   every note (who, when, what changed, the text as Markdown, attachments). The fields are
-  folded under **Details**; click it to show them. Notes made by commits (`[touch:123]`) show
+  folded under **Details**; click it to show them. Click status, priority, type, category,
+  assignee or milestone there to change it, as on a card in the list. Notes made by commits (`[touch:123]`) show
   as commits: the author, the short commit id, the branch and the message. Click a commit to
   see its diff right there (from a local clone: a checkout of that repository in one of your
   spaces' folders or next to them; a commit the clone lacks is fetched first); the arrow icon
@@ -33,8 +34,10 @@ in the right-hand panel next to Files and Changes.
   the message up in the project's repositories: the ticket's own branches (`123`, `123-…`,
   `ticket-123`), else `dev` and the default branch. Clicking
   another title shows that ticket in the same pane; clicking the shown one again closes it.
+- **Post a response** at the bottom of the ticket pane: write a note (Markdown) and post it
+  with **Post** or ⌘↩. Unsent text stays with its ticket while you look at another one.
 - **New ticket** (the **+** icon): a form with subject, description (Markdown), status,
-  priority, type, category and assignee, filled in with the project's defaults (its first open
+  priority, type, category, assignee and milestone, filled in with the project's defaults (its first open
   status, its default priority). In a project it is for that project; in All projects you pick
   the project first. The new ticket opens in the ticket pane.
 - **Kanban** (the board icon, in a project, not All projects) shows the project's open tickets as a board in

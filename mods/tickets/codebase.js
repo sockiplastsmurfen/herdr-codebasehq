@@ -127,20 +127,26 @@ export async function ticketPage(creds, project, search, page) {
 
 /**
  * What a ticket's fields can be set to in this project, each a list of {id, name, colour?}:
- * statuses (by order, with closed), priorities (by position), types, categories, and
- * users (the people on the project, "Unassigned" first).
+ * statuses (by order, with closed), priorities (by position), types, categories,
+ * users (the people on the project, "Unassigned" first) and milestones (the open ones, "None"
+ * first; none at all if they can't be read). allMilestones: every milestone, finished ones too
+ * (with done), for the filters: closed tickets are often in them.
  */
 export async function choices(creds, project) {
   const base = `/${encodeURIComponent(project)}`;
-  const [st, pr, ty, ca, us] = await Promise.all([
+  const [st, pr, ty, ca, us, ms] = await Promise.all([
     get(creds, `${base}/tickets/statuses`),
     get(creds, `${base}/tickets/priorities`),
     get(creds, `${base}/tickets/types`),
     get(creds, `${base}/tickets/categories`),
     get(creds, `${base}/assignments`),
+    get(creds, `${base}/milestones`).catch(() => null),
   ]);
   const rows = (list, key) => (list ?? []).map((r) => r[key] ?? r);
   const byName = (a, b) => a.name.localeCompare(b.name, "sv");
+  const allMilestones = rows(ms, "ticketing_milestone")
+    .map((x) => ({ id: x.id, name: x.name ?? `Milestone ${x.id}`, done: /complete|cancel/i.test(x.status ?? "") }))
+    .sort((a, b) => a.done - b.done || byName(a, b));
   return {
     statuses: rows(st, "ticketing_status").sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
       .map((x) => ({ id: x.id, name: x.name, colour: x.colour, closed: Boolean(x.treat_as_closed ?? x["treat-as-closed"]) })),
@@ -151,6 +157,8 @@ export async function choices(creds, project) {
     users: [{ id: null, name: "Unassigned" }, ...rows(us, "user")
       .map((x) => ({ id: x.id, name: [x.first_name, x.last_name].filter(Boolean).join(" ") || x.username, username: x.username }))
       .sort(byName)],
+    milestones: [{ id: null, name: "None" }, ...allMilestones.filter((x) => !x.done)],
+    allMilestones,
   };
 }
 
@@ -164,6 +172,7 @@ export async function ticketDetail(creds, project, id) {
     reporter: t.reporter ?? null,
     reporterId: t.reporter_id ?? null,
     milestone: t.milestone?.name ?? null,
+    milestoneId: t.milestone_id ?? t.milestone?.id ?? null,
     created: Date.parse(t.created_at ?? "") || 0,
     tags: t.tags ?? "",
   };
@@ -427,7 +436,7 @@ export const commitUrl = (base, project, repo, ref) => `${base}/projects/${proje
 
 /**
  * Creates a ticket: fields { summary, description?, status_id?, priority_id?, ticket_type_id?,
- * category_id?, assignee_id? }. Returns the new ticket (as the list uses them).
+ * category_id?, assignee_id?, milestone_id? }. Returns the new ticket (as the list uses them).
  */
 export async function createTicket(creds, project, fields) {
   const ticket = Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined && v !== null && v !== ""));
@@ -439,7 +448,13 @@ export async function createTicket(creds, project, fields) {
 
 /** Changes a ticket the way Codebase does it: a note with changes ({status_id} or {priority_id}). */
 export async function updateTicket(creds, project, id, changes) {
-  await request(creds, "POST", `/${encodeURIComponent(project)}/tickets/${id}/notes`, { ticket_note: { content: "", changes } });
+  await postNote(creds, project, id, "", changes);
+}
+
+/** Posts a response on a ticket: a note with text (Markdown) and any changes ({ status_id: 3, … }). */
+export async function postNote(creds, project, id, content, changes = {}) {
+  const note = Object.keys(changes).length ? { content, changes } : { content };
+  await request(creds, "POST", `/${encodeURIComponent(project)}/tickets/${id}/notes`, { ticket_note: note });
 }
 
 /** Active projects: [{ name, permalink }], by name. */

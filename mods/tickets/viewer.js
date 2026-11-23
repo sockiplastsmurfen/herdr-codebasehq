@@ -4,16 +4,18 @@
 //   Which ticket it shows is shared("tickets.open"), so clicking another title in the list
 //   shows that one here instead of opening a second pane. Opened with props.view "kanban", the
 //   copy is the board pane instead, following shared("tickets.board"); both can be open at once.
+//   "Post a response" at the bottom of a ticket posts a note (Markdown) and, as in Codebase, any
+//   details picked under it (status, priority, type, category, assignee, milestone); ⌘↩ posts too.
 import { div, svg, image } from "gpui-kit";
-import { v_flex, h_flex, TextView } from "gpui-base";
-import { props, shared, checking, settings, spaces, appHome } from "herdr";
+import { v_flex, h_flex, TextView, TextareaState, Textarea } from "gpui-base";
+import { props, shared, setShared, checking, settings, spaces, appHome, notify } from "herdr";
 import {
   loadCredentials, accountOf, ticketDetail, ticketNotes, accountUsers, ticketUrl, defaultBase, ago,
   noteCommits, commitUrl, plainMessage as plainText, findClone, commitDiff, uploadId, downloadUpload,
-  downloadAvatars,
+  downloadAvatars, postNote, choices, updateTicket,
 } from "./codebase.js";
 import {
-  TITLES, personColour, personBadge, wantPictures, CHANGED, copyId, errText, openLink, iconLink, fieldMark,
+  TITLES, FIELDS, personColour, personBadge, wantPictures, CHANGED, copyId, announceChange, errText, openLink, iconLink, fieldMark, setField,
 } from "./ui.js";
 import { fetchBoard, boardView } from "./kanban.js";
 import { NO_FILTER, searchOf } from "./filters.js";
@@ -130,6 +132,16 @@ export class Viewer {
     this.boardAgain = false;    // the board's filter changed while it loaded: load it again
     this.copied = false;
     this.details = false;       // the fields are folded away until "Details" is clicked
+    this.detailMenu = null;     // the detail whose values are open under it
+    this.savingDetail = null;   // { key, kind } while a changed detail is saved
+    this.loadAgain = false;     // a response was posted while the ticket loaded: load it again
+    // Post a response, per ticket (see replyFor): what is being written stays with its ticket.
+    this.replies = new Map();   // "<project>-<id>" -> reply
+    this.reply = this.replyFor(null);
+    this.metas = new Map();     // project -> choices() (what details can be set to), or { loading } / { error }
+    this.response = TextareaState.new({ placeholder: "Write a response (Markdown)", rows: 4 });
+    this.response.set_auto_grow(4, 14);
+    this.response.on("submit", (e, cx) => { if (e?.secondary) this.postResponse(cx); });
     if (checking()) return;
     cx.spawn(async (cx) => {
       try { this.creds = await loadCredentials(); } catch { this.creds = null; }
@@ -167,6 +179,11 @@ export class Viewer {
     const w = this.wanted();
     const key = !w ? null : w.view === "kanban" ? `kanban:${w.project}` : `${w.project}-${w.id}`;
     if (key === this.key) return;
+    // A response being written stays with its ticket.
+    this.reply.text = this.response.value();
+    this.reply = this.replyFor(key);
+    this.response.set_value(this.reply.text);
+    this.detailMenu = null;
     this.key = key;
     this.ref = w;
     this.ticket = null;
@@ -195,6 +212,7 @@ export class Viewer {
         this.users = users;
         if (this.ref === ref) {
           this.ticket = ticket; this.notes = notes; this.error = null;
+          this.loadMeta(ref.project, cx);
           this.findCommits(ref, notes, cx);
           // Pictures for the people shown: note authors, the assignee, the reporter.
           this.people = users;
@@ -204,8 +222,190 @@ export class Viewer {
         if (this.ref === ref) this.error = errText(e);
       }
       this.loading = false;
-      // Another ticket was picked while this one loaded: load that one now.
-      if (this.ref !== ref) this.load(cx);
+      // Another ticket was picked while this one loaded, or a response was posted: load again.
+      if (this.ref !== ref || this.loadAgain) { this.loadAgain = false; this.load(cx); }
+      cx.notify();
+    });
+  }
+
+  /**
+   * A ticket's response: { open (the form shows), posting, error, text (while another ticket
+   * shows), changes: kind -> picked option, menu: the detail whose values are open }.
+   */
+  replyFor(key) {
+    let r = this.replies.get(key);
+    if (!r) { r = { open: false, posting: false, error: null, text: "", changes: {}, menu: null }; this.replies.set(key, r); }
+    return r;
+  }
+
+  /** Puts a ticket's response away: posted or cancelled. */
+  clearReply(key) {
+    this.replies.delete(key);
+    if (this.key === key) { this.reply = this.replyFor(key); this.response.set_value(""); }
+  }
+
+  /** Opens the response form under the notes, with the keyboard in it. */
+  openResponse(cx) {
+    this.reply.open = true;
+    this.reply.error = null;
+    if (this.ref) this.loadMeta(this.ref.project, cx);
+    this.response.focus();
+    cx.notify();
+  }
+
+  /** What a project's details can be set to (choices()), once. */
+  loadMeta(project, cx) {
+    const m = this.metas.get(project);
+    if (m && (m.loading || m.statuses)) return;
+    const entry = { loading: true, error: null };
+    this.metas.set(project, entry);
+    cx.spawn(async (cx) => {
+      try { Object.assign(entry, await choices(this.creds, project)); }
+      catch (e) { entry.error = errText(e); }
+      entry.loading = false;
+      wantPictures(this, (entry.users ?? []).map((u) => u.id), cx, downloadAvatars, appHome());
+      cx.notify();
+    });
+  }
+
+  /** A detail as the ticket has it now: { id, name, colour, icon }. */
+  currentValue(kind) {
+    const k = this.ticket, f = FIELDS[kind];
+    if (kind === "assignee") return { id: k.assigneeId ?? null, name: k.assigneeId != null ? this.userName(k.assigneeId, k.assignee) : "Unassigned" };
+    // A ticket may name its milestone without its id: found by name among the project's.
+    if (kind === "milestone" && k.milestoneId == null && k.milestone) {
+      const m = this.metas.get(this.ref?.project)?.milestones?.find((x) => x.name === k.milestone);
+      return { id: m?.id ?? null, name: k.milestone };
+    }
+    return { id: k[f.id] ?? null, name: k[f.name] ?? (kind === "milestone" ? "None" : "—"),
+      colour: f.colour ? k[f.colour] : null, icon: f.icon ? k[f.icon] : null };
+  }
+
+  /** The details picked that differ from the ticket's, as the API takes them: { status_id: 3, … }. */
+  replyChanges() {
+    const out = {};
+    for (const [kind, o] of Object.entries(this.reply.changes)) {
+      if ((o.id ?? null) !== this.currentValue(kind).id) out[FIELDS[kind].change] = o.id ?? "";
+    }
+    return out;
+  }
+
+  /** Posts the response (text and changed details) as a note; the ticket reloads, the list hears of it. */
+  postResponse(cx) {
+    const ref = this.ref, key = this.key, reply = this.reply;
+    if (!ref || ref.view === "kanban" || !this.ticket || reply.posting) return;
+    const content = this.response.value().trim(), changes = this.replyChanges();
+    if (!content && !Object.keys(changes).length) { reply.error = "Write a response or change a detail first."; cx.notify(); return; }
+    reply.posting = true;
+    reply.error = null;
+    reply.menu = null;
+    cx.notify();
+    cx.spawn(async (cx) => {
+      try {
+        await postNote(this.creds, ref.project, ref.id, content, changes);
+        announceChange(setShared, this.me, ref.project, ref.id);
+        this.clearReply(key);
+        if (this.key === key) { if (this.loading) this.loadAgain = true; else this.load(cx); }
+      } catch (e) {
+        reply.posting = false;
+        reply.error = errText(e);
+      }
+      cx.notify();
+    });
+  }
+
+  /**
+   * The bottom of a ticket: "Post a response", or the form for it: the text, then the details
+   * to change with it (a changed one is outlined; picking the ticket's own value again undoes it).
+   */
+  responseView(t, avatar) {
+    const r = this.reply;
+    const person = (o, size) => avatar(o.name, size, o.id);
+    const button = (id, label, onClick, strong) => div().id(id).flex_none().px(10).h(26).rounded(6).flex().items_center()
+      .text_size(12).border(1).border_color(strong ? t.accent : t.border).bg(t.surface)
+      .text_color(strong ? t.accent : t.foreground).hover((s) => s.bg(t.hover))
+      .on_click((_e, cx) => onClick(cx)).child(label);
+    const bar = v_flex().flex_none().px(18).py(12).gap(8).border_t(1).border_color(t.border);
+    if (!r.open) return bar.child(h_flex().child(button("respond", "Post a response", (cx) => this.openResponse(cx), true)));
+
+    const kinds = ["status", "priority", "type", "category", "assignee", "milestone"];
+    const changed = (kind) => kind in r.changes && (r.changes[kind].id ?? null) !== this.currentValue(kind).id;
+    const chip = (kind) => {
+      const o = r.changes[kind] ?? this.currentValue(kind), open = r.menu === kind;
+      return h_flex().id(`reply-${kind}`).flex_none().max_w(220).h(26).px(7).gap(6).rounded(6).items_center().text_size(12)
+        .border(1).border_color(changed(kind) ? t.accent : open ? t.input : t.border).bg(open ? t.selected : t.surface)
+        .cursor_pointer().hover((s) => s.bg(t.hover))
+        .tooltip(`${TITLES[kind]}: ${o.name ?? "—"}`)
+        .on_click((_e, cx) => { r.menu = open ? null : kind; this.loadMeta(this.ref.project, cx); cx.notify(); })
+        .child(fieldMark(t, kind, o, 13, person))
+        .child(div().flex_none().text_color(t.dim).child(TITLES[kind]))
+        .child(div().min_w(0).truncate().text_color(changed(kind) ? t.foreground : t.muted).child(o.name ?? "—"));
+    };
+    const menu = (kind) => {
+      const now = this.currentValue(kind).id;
+      return this.optionsMenu(t, `reply-${kind}`, kind, (r.changes[kind] ?? this.currentValue(kind)).id ?? null, now, person, (o, cx) => {
+        if ((o.id ?? null) === now) delete r.changes[kind]; else r.changes[kind] = o;
+        r.menu = null;
+        cx.notify();
+      });
+    };
+    const changes = Object.keys(this.replyChanges()).length;
+
+    return bar
+      .child(Textarea.new(this.response).px(10).py(6).rounded(7).border(1).border_color(t.input)
+        .bg(t.background).text_size(12.5).text_color(t.foreground))
+      .child(h_flex().flex_wrap().gap(6).children(kinds.map(chip)))
+      .when(Boolean(r.menu), (el) => el.child(menu(r.menu)))
+      .when(Boolean(r.error), (el) => el.child(div().text_size(12).text_color(t.ansi1).child(r.error)))
+      .child(h_flex().gap(8).items_center()
+        .child(button("respond-post", r.posting ? "Posting…" : "Post", (cx) => this.postResponse(cx), true))
+        .child(button("respond-cancel", "Cancel", (cx) => { this.clearReply(this.key); cx.notify(); }))
+        .child(div().flex_1().min_w(0).text_size(11).text_color(t.dim).truncate()
+          .child(changes ? `${changes} detail${changes > 1 ? "s" : ""} changed` : ""))
+        .child(div().flex_none().text_size(11).text_color(t.dim).child("⌘↩ posts")));
+  }
+
+  /**
+   * The values a detail can be set to (the project's, from loadMeta), under the detail:
+   * picked is highlighted, now (the ticket's value, if it isn't the picked one) says so,
+   * statuses that close the ticket say so. pick(option, cx).
+   */
+  optionsMenu(t, id, kind, picked, now, person, pick) {
+    const meta = this.metas.get(this.ref.project), f = FIELDS[kind];
+    const box = v_flex().p(4).gap(1).rounded(8).border(1).border_color(t.border).bg(t.raised)
+      .child(div().px(6).pt(2).pb(2).text_size(11).text_color(t.dim).child(TITLES[kind]));
+    if (!meta || meta.loading || meta.error) {
+      return box.child(div().p(8).text_size(12).text_color(meta?.error ? t.ansi1 : t.dim).child(meta?.error ?? "Loading…"));
+    }
+    return box.child(v_flex().id(`${id}-options`).max_h(220).overflow_y_scrollbar().children((meta[f.list] ?? []).map((o) =>
+      h_flex().id(`${id}-${o.id ?? "none"}`).h(26).px(6).gap(8).rounded(5).items_center().text_size(12).cursor_pointer()
+        .when((o.id ?? null) === picked, (el) => el.bg(t.selected)).hover((s) => s.bg(t.hover))
+        .on_click((_e, cx) => pick(o, cx))
+        .child(h_flex().w(18).flex_none().justify_center().child(fieldMark(t, kind, o, 12, person)))
+        .child(div().flex_1().min_w(0).truncate().text_color(o.id == null || o.closed ? t.muted : t.foreground).child(o.name))
+        .when((o.id ?? null) === now && now !== picked, (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child("now")))
+        .when(Boolean(o.closed), (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child("closes"))))));
+  }
+
+  /** Changes a detail of the shown ticket at once, then in Codebase (a note with the change); back if that fails. */
+  changeDetail(kind, option, cx) {
+    const k = this.ticket, ref = this.ref, key = this.key;
+    this.detailMenu = null;
+    if (!k || this.savingDetail || (option.id ?? null) === this.currentValue(kind).id) { cx.notify(); return; }
+    const before = setField(k, kind, option);
+    this.savingDetail = { key, kind };
+    cx.notify();
+    cx.spawn(async (cx) => {
+      try {
+        await updateTicket(this.creds, ref.project, ref.id, { [FIELDS[kind].change]: option.id ?? "" });
+        announceChange(setShared, this.me, ref.project, ref.id);
+        // The change shows as a note too.
+        if (this.key === key) { if (this.loading) this.loadAgain = true; else this.load(cx); }
+      } catch (e) {
+        Object.assign(k, before);
+        notify({ title: `Could not change #${ref.id}`, body: errText(e), level: "error", timeout: 10000 });
+      }
+      this.savingDetail = null;
       cx.notify();
     });
   }
@@ -446,7 +646,24 @@ export class Viewer {
     const field = (label, value) => h_flex().gap(8).min_h(22).items_center()
       .child(div().w(96).flex_none().text_size(12).text_color(t.dim).child(label))
       .child(h_flex().flex_1().min_w(0).gap(6).items_center().text_size(12.5).children([].concat(value)));
-    const assignee = k.assigneeId != null ? this.userName(k.assigneeId, k.assignee) : null;
+    // A detail that can be changed: click it for its values, as on a card in the list.
+    const person = (o, size) => avatar(o.name, size, o.id);
+    const detail = (kind) => {
+      const o = this.currentValue(kind), open = this.detailMenu === kind;
+      const saving = this.savingDetail?.key === this.key && this.savingDetail?.kind === kind;
+      return v_flex()
+        .child(h_flex().id(`detail-${kind}`).ml(-6).px(6).gap(8).min_h(24).rounded(5).items_center().cursor_pointer()
+          .when(open, (el) => el.bg(t.selected)).hover((s) => s.bg(t.hover))
+          .tooltip(`Change ${TITLES[kind].toLowerCase()}`)
+          .on_click((_e, cx) => { this.detailMenu = open ? null : kind; this.loadMeta(this.ref.project, cx); cx.notify(); })
+          .child(div().w(96).flex_none().text_size(12).text_color(t.dim).child(TITLES[kind]))
+          .child(h_flex().flex_1().min_w(0).gap(6).items_center().text_size(12.5)
+            .child(fieldMark(t, kind, o, 13, person))
+            .child(div().min_w(0).truncate().text_color(o.id == null ? t.dim : t.foreground).child(o.name ?? "—")))
+          .when(saving, (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child("Saving…"))))
+        .when(open, (el) => el.child(div().pt(4).pb(6).child(
+          this.optionsMenu(t, `detail-${kind}`, kind, o.id, o.id, person, (opt, cx) => this.changeDetail(kind, opt, cx)))));
+    };
 
     const header = v_flex().flex_none().px(18).pt(14).pb(14).gap(10).border_b(1).border_color(t.border)
       .child(h_flex().items_center().gap(6)
@@ -469,13 +686,8 @@ export class Viewer {
         .child(svg(`mods/tickets/icons/chevron-${this.details ? "down" : "right"}.svg`).size(13).flex_none())
         .child(div().child("Details")))
       .when(this.details, (el) => el.child(v_flex().gap(2)
-        .child(field(TITLES.status, [fieldMark(t, "status", { colour: k.statusColour }, 13), div().child(k.status ?? "—")]))
-        .child(field(TITLES.priority, [fieldMark(t, "priority", { colour: k.priorityColour }, 13), div().child(k.priority ?? "—")]))
-        .child(field(TITLES.type, [fieldMark(t, "type", { icon: k.typeIcon }, 13), div().child(k.type ?? "—")]))
-        .child(field(TITLES.category, div().child(k.category ?? "—")))
-        .child(field(TITLES.assignee, assignee ? [avatar(assignee, 18, k.assigneeId), div().child(assignee)] : div().text_color(t.dim).child("Unassigned")))
+        .children(["status", "priority", "type", "category", "assignee", "milestone"].map(detail))
         .child(field("Reported by", div().child(this.userName(k.reporterId, k.reporter))))
-        .when(Boolean(k.milestone), (el) => el.child(field("Milestone", div().child(k.milestone))))
         .child(field("Created", div().child(`${dateText(k.created)} · updated ${ago(k.updated)} ago`)))));
 
     const mono = settings().font ?? "JetBrains Mono";
@@ -552,6 +764,7 @@ export class Viewer {
       .child(v_flex().id("ticket-notes").flex_1().min_h(0).overflow_y_scrollbar().pb(16)
         .when(Boolean(this.error), (el) => el.child(note(this.error, t.ansi1)))
         .when(notes.length === 0, (el) => el.child(note("No notes.")))
-        .children(notes.map(noteView)));
+        .children(notes.map(noteView)))
+      .child(this.responseView(t, avatar));
   }
 }

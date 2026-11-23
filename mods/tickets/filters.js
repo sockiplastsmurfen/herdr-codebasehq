@@ -1,12 +1,16 @@
-// The filter bar the list and the board share: resolution, assignee, status, priority, category
-// and type, sent to Codebase as a search ("assignee:me status:New,Accepted resolution:open").
+// The filter bar the list and the board share: resolution, assignee, status, priority, category,
+// type and milestone, sent to Codebase as a search ("assignee:me status:New,Accepted resolution:open").
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { FIELDS, TITLES, colourOf } from "./ui.js";
 
-export const FILTER_KINDS = ["assignee", "status", "priority", "category", "type"];
+export const FILTER_KINDS = ["assignee", "status", "priority", "category", "type", "milestone"];
 /** Nothing picked: everyone's tickets, open and closed. */
-export const NO_FILTER = { assignee: [], status: [], priority: [], category: [], type: [], resolution: "all" };
+export const NO_FILTER = { assignee: [], status: [], priority: [], category: [], type: [], milestone: [], resolution: "all" };
+
+// Where a filter's values are in choices(), when not where a ticket's field takes them from:
+// milestones that are done still find their (closed) tickets.
+const VALUES = { milestone: "allMilestones" };
 
 const quote = (v) => (/[\s,:"]/.test(v) ? `"${v.replace(/"/g, "")}"` : v);
 
@@ -60,7 +64,7 @@ export function filterBar(t, o) {
     } else {
       const list = kind === "assignee"
         ? [{ value: "me", name: "Me" }, ...(meta.users ?? []).filter((u) => u.username && u.username !== o.me).map((u) => ({ value: u.username, name: u.name }))]
-        : (meta[FIELDS[kind].list] ?? []).map((x) => ({ value: x.name, name: x.name, colour: x.colour, closed: x.closed }));
+        : (meta[VALUES[kind] ?? FIELDS[kind].list] ?? []).map((x) => ({ value: x.name, name: x.name, colour: x.colour, closed: x.closed, done: x.done }));
       options = list.map((x) => ({ ...x, on: f[kind].includes(x.value) }));
     }
     const pick = (x, cx) => {
@@ -83,7 +87,8 @@ export function filterBar(t, o) {
             .when(x.on, (el) => el.child(svg("mods/tickets/check.svg").size(10).text_color(t.accent_foreground))))
           .when(Boolean(x.colour), (el) => el.child(div().size(7).rounded(4).flex_none().bg(colourOf(t, x.colour))))
           .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(x.name))
-          .when(Boolean(x.closed), (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child("closed")))))));
+          .when(Boolean(x.closed), (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child("closed")))
+          .when(Boolean(x.done), (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child("done")))))));
   }
 
   const isDefault = JSON.stringify(f) === JSON.stringify(o.defaults);

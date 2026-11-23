@@ -34,9 +34,10 @@ export const FIELDS = {
   type:     { list: "types",      change: "ticket_type_id", id: "typeId",  name: "type",     icon: "typeIcon" },
   category: { list: "categories", change: "category_id", id: "categoryId", name: "category" },
   assignee: { list: "users",      change: "assignee_id", id: "assigneeId", name: "assignee" },
+  milestone: { list: "milestones", change: "milestone_id", id: "milestoneId", name: "milestone" },
 };
 
-export const TITLES = { status: "Status", priority: "Priority", type: "Type", category: "Category", assignee: "Assigned to" };
+export const TITLES = { status: "Status", priority: "Priority", type: "Type", category: "Category", assignee: "Assigned to", milestone: "Milestone" };
 
 /**
  * Shows a picked value on a ticket at once (k changes); returns the ticket as it was, to put
@@ -55,13 +56,14 @@ export function setField(k, kind, option) {
 
 /**
  * What a field's value looks like, on a card and in its menu: a status dot, a priority flag,
- * the type's icon, a category tag, or the person (person(o, size) draws someone).
+ * the type's icon, a category tag, a milestone, or the person (person(o, size) draws someone).
  */
 export function fieldMark(t, kind, o, size, person) {
   if (kind === "status") return div().size(7).rounded(4).flex_none().bg(colourOf(t, o?.colour));
   if (kind === "priority") return svg("mods/tickets/icons/flag.svg").size(size).flex_none().text_color(colourOf(t, o?.colour));
   if (kind === "type") return svg(typeIcon(o?.icon)).size(size).flex_none().text_color(t.muted);
   if (kind === "category") return svg("mods/tickets/icons/tag.svg").size(size - 1).flex_none().text_color(t.dim);
+  if (kind === "milestone") return svg("mods/tickets/icons/milestone.svg").size(size).flex_none().text_color(o?.id == null ? t.dim : t.muted);
   if (o?.id == null) return svg("mods/tickets/user.svg").size(size).flex_none().text_color(t.dim);
   return person(o, size + 5);
 }

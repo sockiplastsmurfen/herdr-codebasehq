@@ -39,7 +39,7 @@ const tag = (k, project, projectName) => ({ ...k, project, projectName: projectN
 
 // The list's filter, per project. Values are what Codebase's search takes: names, and usernames
 // (or "me") for the assignee. resolution: "open" | "closed" | "all".
-const DEFAULT_FILTER = { assignee: ["me"], status: [], priority: [], category: [], type: [], resolution: "open" };
+const DEFAULT_FILTER = { assignee: ["me"], status: [], priority: [], category: [], type: [], milestone: [], resolution: "open" };
 
 export default class Tickets extends View {
   init(_props, cx) {
@@ -398,7 +398,7 @@ export default class Tickets extends View {
     if (kind === "priority") return meta.priorities.find((x) => x.isDefault) ?? meta.priorities[0] ?? null;
     if (kind === "type") return meta.types[0] ?? null;
     if (kind === "category") return meta.categories[0] ?? null;
-    return null; // assignee: nobody unless picked
+    return null; // assignee and milestone: none unless picked
   }
 
   submitNew(cx) {
@@ -415,7 +415,7 @@ export default class Tickets extends View {
         const k = await createTicket(this.creds, d.project, {
           summary, description: this.description.value().trim() || undefined,
           status_id: id("status"), priority_id: id("priority"), ticket_type_id: id("type"),
-          category_id: id("category"), assignee_id: id("assignee"),
+          category_id: id("category"), assignee_id: id("assignee"), milestone_id: id("milestone"),
         });
         notify({ title: `#${k.id} created`, body: summary, level: "success", timeout: 5000 });
         announceChange(setShared, this.me, d.project, k.id);
@@ -713,11 +713,12 @@ export default class Tickets extends View {
     const metas = [...projects].map((x) => this.meta.get(x)).filter(Boolean);
     if (metas.some((m) => m.loading) && !metas.some((m) => m.statuses)) return { loading: true };
     const merged = { loading: false };
-    for (const [list, key] of [["statuses", "name"], ["priorities", "name"], ["types", "name"], ["categories", "name"], ["users", "username"]]) {
+    for (const [list, key] of [["statuses", "name"], ["priorities", "name"], ["types", "name"], ["categories", "name"], ["users", "username"], ["allMilestones", "name"]]) {
       const seen = new Map();
       for (const m of metas) for (const o of m[list] ?? []) if (o[key] && !seen.has(o[key])) seen.set(o[key], o);
       merged[list] = [...seen.values()];
       if (list === "categories" || list === "users") merged[list].sort((a, b) => a.name.localeCompare(b.name, "sv"));
+      if (list === "allMilestones") merged[list].sort((a, b) => a.done - b.done || a.name.localeCompare(b.name, "sv"));
     }
     return merged;
   }
@@ -758,6 +759,7 @@ export default class Tickets extends View {
       if (kind === "priority") return meta.priorities;
       if (kind === "type") return meta.types;
       if (kind === "category") return meta.categories;
+      if (kind === "milestone") return meta.milestones;
       // People on the project, you first.
       const users = (meta.users ?? []).filter((u) => u.id != null);
       return [{ id: null, name: "Unassigned" }, ...users.filter((u) => u.username === me), ...users.filter((u) => u.username !== me)];
@@ -777,7 +779,7 @@ export default class Tickets extends View {
           .on_click((_e, cx) => { d.menu = open ? null : kind; if (kind === "project") this.ensureProjects(cx); cx.notify(); })
           .child(mark(kind, value))
           .child(div().flex_1().min_w(0).truncate().text_color(value ? t.foreground : t.dim)
-            .child(value?.name ?? (kind === "assignee" ? "Unassigned" : kind === "project" ? "Pick a project" : "—")))
+            .child(value?.name ?? (kind === "assignee" ? "Unassigned" : kind === "milestone" ? "None" : kind === "project" ? "Pick a project" : "—")))
           .child(svg(`mods/tickets/icons/chevron-${open ? "down" : "right"}.svg`).size(12).flex_none().text_color(t.dim)))
         .when(open, (el) => el.child(v_flex().mt(4).p(4).gap(1).rounded(8).border(1).border_color(t.border).bg(t.raised)
           .when(kind === "project", (el) => el.child(div().p(2).child(Input.new(this.draftFilter).h(28).px(8).rounded(6).border(1)
@@ -789,7 +791,7 @@ export default class Tickets extends View {
               .hover((s) => s.bg(t.hover))
               .on_click((_e, cx) => {
                 if (kind === "project") {
-                  if (o.id !== d.project) Object.assign(d, { project: o.id, projectName: o.name, status: undefined, priority: undefined, type: undefined, category: undefined, assignee: undefined });
+                  if (o.id !== d.project) Object.assign(d, { project: o.id, projectName: o.name, status: undefined, priority: undefined, type: undefined, category: undefined, assignee: undefined, milestone: undefined });
                   this.loadChoices(o.id, cx);
                   this.summary.focus();
                 } else d[kind] = o.id == null && kind === "assignee" ? null : o;
@@ -814,7 +816,8 @@ export default class Tickets extends View {
           .child(select("priority", TITLES.priority))
           .child(select("type", TITLES.type))
           .child(select("category", TITLES.category))
-          .child(select("assignee", TITLES.assignee)))
+          .child(select("assignee", TITLES.assignee))
+          .child(select("milestone", TITLES.milestone)))
         .when(Boolean(d.error), (el) => el.child(div().pt(12).text_size(12).text_color(t.ansi1).child(d.error)))
         .child(h_flex().pt(16).gap(8)
           .child(this.button(t, "new-create", d.saving ? "Creating…" : "Create ticket", (cx) => this.submitNew(cx), true))
