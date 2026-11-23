@@ -31,6 +31,7 @@ const WATCH = 1500;       // how often to look at which folder is focused (no ex
 const REFRESH = 120000;   // tickets
 const STALE = 60000;      // switching back to a project reloads it if older than this
 const BATCH = 3;          // pages (20 tickets each) loaded at a time; "Load more" gets the next ones
+const SEARCH_DELAY = 400; // ms after the last key before the list searches
 const SHOWN = 60;         // cards drawn at a time: All projects can load hundreds, and drawing them all is slow
 const ALL = "*";          // the "project" that means every active project
 const PARALLEL = 8;       // requests at a time when asking every project
@@ -112,6 +113,11 @@ export default class Tickets extends View {
     this.draftFilter = InputState.new({ placeholder: "Filter projects" });
     this.draftFilter.on("change", (_e, cx) => cx.notify());
     this.filter = InputState.new({ placeholder: "Filter projects" });
+    // Searching the list (searchFor): words, or a ticket's number.
+    this.searchText = "";
+    this.searchInput = InputState.new({ placeholder: "Search: words, or #123" });
+    this.searchInput.on("change", (_e, cx) => this.searchChanged(cx));
+    this.searchInput.on("submit", (_e, cx) => this.searchChanged(cx, true));
     this.filter.on("change", (_e, cx) => cx.notify());
     this.key.on("submit", (_e, cx) => this.save(cx));
     // Cloning a project that has no checkout yet.
@@ -210,9 +216,34 @@ export default class Tickets extends View {
     cx.notify();
   }
 
+  /**
+   * The search sent to Codebase: the filter, and the words in the search field. "#123" or
+   * "123" is that ticket; anything else is free text in summaries and notes.
+   */
+  searchFor(project) {
+    const text = (this.searchText ?? "").trim();
+    const words = /^#?\d+$/.test(text) ? `id:${text.replace("#", "")}` : text.replace(/\s+/g, " ");
+    return [searchOf(this.filterFor(project)), words].filter(Boolean).join(" ");
+  }
+
+  /** The search field changed: the list follows a moment after the typing stops (Enter: at once). */
+  searchChanged(cx, now = false) {
+    const text = this.searchInput.value();
+    if (text === this.searchText && !now) return;
+    const token = (this.searchToken ?? 0) + 1;
+    this.searchToken = token;
+    const apply = (cx) => {
+      if (this.searchToken !== token) return;
+      this.searchText = this.searchInput.value();
+      this.load(cx, false);
+      cx.notify();
+    };
+    if (now) apply(cx); else cx.timer.after(SEARCH_DELAY, apply);
+  }
+
   /** Tickets are cached per project and search. */
   entryFor(project) {
-    const key = `${project}\n${searchOf(this.filterFor(project))}`;
+    const key = `${project}\n${this.searchFor(project)}`;
     let entry = this.cache.get(key);
     if (!entry) { entry = { tickets: null, error: null, at: 0, loading: false, pages: 0, more: false, shown: SHOWN }; this.cache.set(key, entry); }
     return entry;
@@ -226,7 +257,7 @@ export default class Tickets extends View {
     const p = this.project();
     if (!p || !this.creds) return;
     if (p.all) return this.loadAll(cx, force, more);
-    const search = searchOf(this.filterFor(p.permalink));
+    const search = this.searchFor(p.permalink);
     const entry = this.entryFor(p.permalink);
     if (entry.loading) { if (force === true) entry.again = true; return; }
     if (!more && !force && Date.now() - entry.at < STALE) return;
@@ -278,7 +309,7 @@ export default class Tickets extends View {
     if (!more && !force && Date.now() - entry.at < STALE) return;
     if (force === "timer" && Date.now() - entry.at < REFRESH_ALL) return;
     if (more && !entry.more) return;
-    const search = searchOf(this.filterFor(ALL));
+    const search = this.searchFor(ALL);
     entry.loading = true;
     cx.notify();
     cx.spawn(async (cx) => {
@@ -930,7 +961,8 @@ export default class Tickets extends View {
       };
       content = v_flex()
         .when(Boolean(entry.error), (el) => el.child(this.note(t, entry.error, t.ansi1)))
-        .when(tickets.length === 0, (el) => el.child(this.note(t, "No tickets match the filter.")))
+        .when(tickets.length === 0, (el) => el.child(this.note(t, entry.loading ? "Loading…"
+          : this.searchText.trim() ? "No tickets match the search and the filter." : "No tickets match the filter.")))
         .children(tickets.slice(0, entry.shown).map(card))
         .when(tickets.length > entry.shown, (el) => el.child(h_flex().px(10).pb(12).justify_center()
           .child(this.button(t, "show-more", `Show more (${tickets.length - entry.shown} not shown)`, (cx) => { entry.shown += SHOWN; cx.notify(); }))))
@@ -944,8 +976,21 @@ export default class Tickets extends View {
       .child(header)
       .child(v_flex().id("tickets-list").flex_1().min_h(0).overflow_y_scrollbar()
         .child(this.projectLine(t, p))
+        .child(this.searchBar(t))
         .child(this.renderFilters(t, p.permalink))
         .child(content));
+  }
+
+  /** The search field above the filters, with a button that clears it. */
+  searchBar(t) {
+    const text = this.searchInput.value();
+    return h_flex().px(10).pb(8).gap(4).items_center()
+      .child(div().flex_1().min_w(0).child(Input.new(this.searchInput).h(28).px(8).rounded(6).border(1)
+        .border_color(this.searchText ? t.accent : t.input).bg(t.background).text_size(12.5)))
+      .when(Boolean(text), (el) => el.child(iconLink(t, "search-clear", "mods/codebasehq/icons/x.svg", (cx) => {
+        this.searchInput.set_value("");
+        this.searchChanged(cx, true);
+      }, null, "Clear the search")));
   }
 
   /**

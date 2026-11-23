@@ -27,6 +27,9 @@ A [Herdr](https://herdr.dev) mod for [Codebase HQ](https://www.codebasehq.com) t
   Age is on the right. The **copy icon** copies `#<id> <title>`, the **arrow icon** shows
   the ticket in the browser. The **reload** icon reloads (it also reloads every 2 minutes, and within
   20 seconds of a ticket changing elsewhere: by Claude, in Codebase's web UI).
+- **Search** in the field above the filters: words (in summaries and notes), or a ticket's number
+  (`#123` or `123`). It searches a moment after you stop typing, or at once with Enter, together
+  with the filters; the × clears it.
 - **Filter** with the buttons above the list: resolution (Open, Closed, Open and closed),
   Assignee (people, Me and Unassigned), Status, Priority, Category, Type and Milestone (finished
   milestones too, marked done).
