@@ -364,7 +364,16 @@ export function remoteKey(url) {
  */
 export async function findClone(cloneUrl, folders) {
   const key = remoteKey(cloneUrl);
-  if (!key) return null;
+  return key ? findCheckout(folders, (url) => remoteKey(url) === key) : null;
+}
+
+/** A local checkout of any of a project's repositories, looked for as findClone does. */
+export async function findProjectCheckout(project, folders) {
+  return findCheckout(folders, (url) => parseRemote(url)?.project === project);
+}
+
+/** The first checkout in the folders, or next to them, whose origin url passes `wanted`. */
+async function findCheckout(folders, wanted) {
   const parents = [...new Set(folders.filter(Boolean).flatMap((f) => [f, f.replace(/\/[^/]+\/?$/, "")]))];
   for (const dir of parents) {
     // Every checkout in dir and dir itself: "<folder>\t<origin url>" per line.
@@ -373,7 +382,7 @@ export async function findClone(cloneUrl, folders) {
       "sh", dir], { timeout: 15000 }).catch(() => null);
     for (const line of (r?.stdout ?? "").split("\n")) {
       const [folder, url] = line.split("\t");
-      if (folder && remoteKey(url) === key) return folder;
+      if (folder && wanted(url)) return folder;
     }
   }
   return null;

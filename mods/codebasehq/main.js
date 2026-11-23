@@ -16,7 +16,7 @@ import { focused, spaces, panes, theme, checking, props, notify, run, shared, se
 import {
   loadCredentials, saveCredentials, forgetCredentials, accountOf, usernameOf,
   ticketPage, projects, repoOf, ticketUrl, ticketsUrl, ago, ApiError, defaultBase, normalizeBase, choices, updateTicket,
-  accountUsers, downloadAvatars, createTicket,
+  accountUsers, downloadAvatars, createTicket, findProjectCheckout,
 } from "./codebase.js";
 import {
   TITLES, FIELDS, personBadge, wantPictures, CHANGED, copyId, announceChange,
@@ -34,6 +34,17 @@ const ALL = "*";          // the "project" that means every active project
 const PARALLEL = 8;       // requests at a time when asking every project
 const REFRESH_ALL = 600000; // all projects means one request per project: refresh by itself less often
 const NOTICE = 20000;     // look for tickets changed elsewhere (Claude, Codebase's web UI): one request
+
+/** The layout's nodes from the root down to this mod's block, or null when layout() leaves blocks' content out. */
+function listPath(node = layout(), trail = []) {
+  if (!node) return null;
+  const here = [...trail, node];
+  if (node.content?.mod === "codebasehq") return here;
+  for (const child of node.children ?? []) { const found = listPath(child, here); if (found) return found; }
+  return null;
+}
+const layoutNode = (id, node = layout()) =>
+  node?.id === id ? node : (node?.children ?? []).map((c) => layoutNode(id, c)).find(Boolean) ?? null;
 
 /** A ticket with its project; ticket numbers are only unique within a project, so uid is both. */
 const tag = (k, project, projectName) => ({ ...k, project, projectName: projectName ?? project, uid: `${project}-${k.id}` });
@@ -54,6 +65,7 @@ export default class Tickets extends View {
     this.me = copyId();         // to know our own change announcements
     this.seenChange = shared(CHANGED)?.at ?? 0;
     this.newest = new Map();    // project -> the newest ticket update seen by notice()
+    this.folderRepos = new Map(); // "<machine>\n<folder>" -> repoOf() (null: not a Codebase repo)
     this.noticing = false;
     this.view = "list";         // "list" | "picker" | "setup"
     this.cwd = undefined;
@@ -281,6 +293,62 @@ export default class Tickets extends View {
       if (entry.again) { entry.again = false; this.load(cx, true); }
       cx.notify();
     });
+  }
+
+  /**
+   * The space that works in a project: first one with a terminal in a checkout of one of the
+   * project's repositories, else one whose folder is such a checkout. Terminals come first as
+   * a space's folder is only where new terminals start, and can be somewhere else entirely.
+   * Folders are looked up once.
+   */
+  async spaceFor(project) {
+    const list = spaces(), all = panes();
+    const inProject = async (s, folder) => {
+      const key = `${s.machine ?? ""}\n${folder}`;
+      if (!this.folderRepos.has(key)) {
+        this.folderRepos.set(key, await repoOf(folder, s.machine ?? undefined).catch(() => null));
+      }
+      return this.folderRepos.get(key)?.remote?.project === project;
+    };
+    for (const s of list) {
+      const tabs = new Set(s.tabs.map((x) => x.id));
+      const folders = new Set(all.filter((x) => tabs.has(x.tab) && x.cwd).map((x) => x.cwd));
+      for (const folder of folders) if (await inProject(s, folder)) return s;
+    }
+    for (const s of list) if (s.folder && await inProject(s, s.folder)) return s;
+    return null;
+  }
+
+  /**
+   * Goes to the space that works in the ticket's project (from a card in All projects). With
+   * none, opens one in a local checkout of the project found next to the spaces' folders.
+   */
+  goToProject(k, cx) {
+    cx.spawn(async (cx) => {
+      const s = await this.spaceFor(k.project);
+      if (s) { run("space.select", { id: s.id }); await this.showListIn((x) => x.id === s.id, cx); return; }
+      const local = spaces().filter((x) => !x.machine);
+      const tabs = new Set(local.flatMap((x) => x.tabs.map((tab) => tab.id)));
+      const folders = [...local.map((x) => x.folder), ...panes().filter((x) => tabs.has(x.tab)).map((x) => x.cwd)];
+      const folder = await findProjectCheckout(k.project, [...new Set(folders.filter(Boolean))]).catch(() => null);
+      if (folder) { run("space.new", { folder }); await this.showListIn((x) => x.folder === folder, cx); }
+      else notify({ title: `No checkout of ${k.projectName ?? k.project}`, body: "No space works in it, and no clone of its repositories was found next to your spaces' folders.", level: "info" });
+    });
+  }
+
+  /**
+   * Shows the list once the space that `is` picks is the shown one. The tab bar puts back each
+   * space's own side panel when it switches, so this waits for that before showing the list.
+   */
+  async showListIn(is, cx) {
+    for (let waited = 0; waited < 3000; waited += 100) {
+      if (spaces().some((x) => x.active && is(x))) {
+        await cx.sleep(500);
+        this.showList();
+        return;
+      }
+      await cx.sleep(100);
+    }
   }
 
   /** A list couldn't be loaded: it says why; a refused key opens the settings. */
@@ -554,19 +622,23 @@ export default class Tickets extends View {
    * "panel"), else this block. The Tickets button in the tab bar shows it again.
    */
   hideList() {
-    const path = (node, trail = []) => {
-      if (!node) return null;
-      const here = [...trail, node];
-      if (node.content?.mod === "codebasehq") return here;
-      for (const child of node.children ?? []) { const found = path(child, here); if (found) return found; }
-      return null;
-    };
-    const byId = (node, id) => node?.id === id ? node : (node?.children ?? []).map((c) => byId(c, id)).find(Boolean) ?? null;
-    const root = layout();
-    const found = path(root);
+    const found = listPath();
     // Without the blocks' content in layout(), the layout's side panel by its id.
-    const panel = found ? found.find((n) => n.id === "panel") ?? found[found.length - 1] : byId(root, "panel");
+    const panel = found ? found.find((n) => n.id === "panel") ?? found[found.length - 1] : layoutNode("panel");
     if (panel?.id && !panel.hidden) run("layout.hide", { id: panel.id });
+  }
+
+  /** Shows the list: picks this block in its stack (as the Tickets button does) and shows what hides it. */
+  showList() {
+    const found = listPath();
+    if (!found) {
+      run("layout.select", { stack: "panel-body", child: "codebasehq" });
+      run("layout.show", { id: "panel" });
+      return;
+    }
+    const block = found[found.length - 1], parent = found[found.length - 2];
+    if (parent?.id && block.id) run("layout.select", { stack: parent.id, child: block.id });
+    for (const n of found) if (n.id && n.hidden) run("layout.show", { id: n.id });
   }
 
   // --- drawing -----------------------------------------------------------------
@@ -698,7 +770,11 @@ export default class Tickets extends View {
         return v_flex().id(`ticket-${k.uid}`).flex_none().mx(10).mb(8).px(12).pt(10).pb(8).gap(6)
           .rounded(8).border(1).border_color(shown ? t.accent : this.menu?.id === k.uid ? t.input : t.border).bg(t.raised)
           .hover((s) => s.border_color(t.input))
-          .when(p.all, (el) => el.child(div().mb(-3).text_size(11).text_color(t.dim).truncate().child(k.projectName ?? k.project)))
+          .when(p.all, (el) => el.child(h_flex().mb(-3).child(div().id(`project-${k.uid}`).min_w(0).truncate()
+            .text_size(11).text_color(t.dim).hover((s) => s.text_color(t.accent))
+            .tooltip("Go to the space that works in this project")
+            .on_click((_e, cx) => this.goToProject(k, cx))
+            .child(k.projectName ?? k.project))))
           .child(h_flex().gap(8).items_start()
             .child(div().flex_none().text_size(13).font_semibold().text_color(t.muted).child(`#${k.id}`))
             .child(div().id(`title-${k.uid}`).flex_1().min_w(0).text_size(13).rounded(4)
