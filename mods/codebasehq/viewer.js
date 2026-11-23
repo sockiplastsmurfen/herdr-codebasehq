@@ -12,6 +12,7 @@ import { props, shared, checking, settings, spaces, appHome, openOverlay, notify
 import {
   loadCredentials, accountOf, ticketDetail, ticketNotes, accountUsers, ticketUrl, defaultBase, ago,
   noteCommits, commitUrl, findClone, commitDiff, uploadId, downloadUpload, saveToDownloads, canShow, postNote, choices,
+  chooseFiles, uploadFile,
 } from "./codebase.js";
 import {
   TITLES, FIELDS, personColour, personBadge, wantPictures, CHANGED, copyId, announceChange, changeIsAbout, errText, openLink,
@@ -327,7 +328,7 @@ export class Viewer {
    */
   replyFor(key) {
     let r = this.replies.get(key);
-    if (!r) { r = { open: false, posting: false, error: null, text: "", changes: {}, menu: null }; this.replies.set(key, r); }
+    if (!r) { r = { open: false, posting: false, error: null, text: "", changes: {}, menu: null, files: [], progress: null }; this.replies.set(key, r); }
     return r;
   }
 
@@ -388,22 +389,52 @@ export class Viewer {
   postResponse(cx) {
     const ref = this.ref, key = this.key, reply = this.reply;
     if (!ref || ref.view === "kanban" || !this.ticket || reply.posting) return;
-    const content = this.response.value().trim(), changes = this.replyChanges();
-    if (!content && !Object.keys(changes).length) { reply.error = "Write a response or change a detail first."; cx.notify(); return; }
+    const content = this.response.value().trim(), changes = this.replyChanges(), files = [...reply.files];
+    if (!content && !Object.keys(changes).length && !files.length) { reply.error = "Write a response, attach a file or change a detail first."; cx.notify(); return; }
     reply.posting = true;
     reply.error = null;
     reply.menu = null;
     cx.notify();
     cx.spawn(async (cx) => {
       try {
-        await postNote(this.creds, ref.project, ref.id, content, changes);
+        // The files go up first; the note takes them by their tokens.
+        const tokens = [];
+        for (const [i, path] of files.entries()) {
+          reply.progress = files.length > 1 ? `Uploading ${i + 1} of ${files.length}…` : "Uploading…";
+          cx.notify();
+          tokens.push(await uploadFile(this.creds, path));
+        }
+        reply.progress = null;
+        await postNote(this.creds, ref.project, ref.id, content, changes, tokens);
         announceChange(this.me, ref.project, ref.id);
         this.clearReply(key);
         if (this.key === key) this.reload(cx);
       } catch (e) {
         reply.posting = false;
+        reply.progress = null;
         reply.error = errText(e);
       }
+      cx.notify();
+    });
+  }
+
+  /** Adds files to the shown ticket's response (from the chooser, or dropped on the form). */
+  attach(paths, cx) {
+    const r = this.reply;
+    for (const p of paths) if (p && !r.files.includes(p)) r.files.push(p);
+    r.error = null;
+    cx.notify();
+  }
+
+  /** The macOS file chooser for the response; it waits for the person, in a task of its own. */
+  chooseAttachments(cx) {
+    const r = this.reply;
+    if (r.choosing) return;
+    r.choosing = true;
+    cx.notify();
+    cx.spawn(async (cx) => {
+      try { this.attach(await chooseFiles(), cx); } catch (e) { r.error = errText(e); }
+      r.choosing = false;
       cx.notify();
     });
   }
@@ -441,17 +472,27 @@ export class Viewer {
     };
     const changes = Object.keys(this.replyChanges()).length;
 
+    // Files to attach: dropped on the form (from Finder) or chosen with Attach.
+    const file = (path, i) => h_flex().id(`reply-file-${i}`).flex_none().max_w(260).h(24).pl(8).pr(2).gap(4).rounded(6).items_center()
+      .text_size(12).border(1).border_color(t.border).bg(t.surface)
+      .child(svg("mods/codebasehq/icons/paperclip.svg").size(12).flex_none().text_color(t.muted))
+      .child(div().min_w(0).truncate().child(path.split("/").pop()))
+      .when(!r.posting, (el) => el.child(iconLink(t, `reply-file-x-${i}`, "mods/codebasehq/icons/x.svg",
+        (cx) => { r.files = r.files.filter((x) => x !== path); cx.notify(); }, null, "Don't attach it")));
     return bar
+      .on_drop((e, cx) => this.attach(e.paths ?? [], cx))
       .child(Textarea.new(this.response).px(10).py(6).rounded(7).border(1).border_color(t.input)
         .bg(t.background).text_size(12.5).text_color(t.foreground))
+      .when(r.files.length > 0, (el) => el.child(h_flex().flex_wrap().gap(6).children(r.files.map(file))))
       .child(h_flex().flex_wrap().gap(6).children(kinds.map(chip)))
       .when(Boolean(r.menu), (el) => el.child(menu(r.menu)))
       .when(Boolean(r.error), (el) => el.child(div().text_size(12).text_color(t.ansi1).child(r.error)))
       .child(h_flex().gap(8).items_center()
-        .child(button("respond-post", r.posting ? "Posting…" : "Post", (cx) => this.postResponse(cx), true))
+        .child(button("respond-post", r.progress ?? (r.posting ? "Posting…" : "Post"), (cx) => this.postResponse(cx), true))
         .child(button("respond-cancel", "Cancel", (cx) => { this.clearReply(this.key); cx.notify(); }))
+        .child(button("respond-attach", r.choosing ? "Choosing…" : "Attach…", (cx) => this.chooseAttachments(cx)))
         .child(div().flex_1().min_w(0).text_size(11).text_color(t.dim).truncate()
-          .child(changes ? `${changes} detail${changes > 1 ? "s" : ""} changed` : ""))
+          .child(changes ? `${changes} detail${changes > 1 ? "s" : ""} changed` : "Drop files here to attach them"))
         .child(div().flex_none().text_size(11).text_color(t.dim).child("⌘↩ posts")));
   }
 

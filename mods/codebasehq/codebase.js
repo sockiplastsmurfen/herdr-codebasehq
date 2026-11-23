@@ -688,6 +688,41 @@ export async function attachmentView(creds, appHome, id, name) {
   return { kind: "first", count: 1, pages: [await size(`${at.rel}/first/${at.file.split("/").pop()}.png`)] };
 }
 
+/**
+ * The macOS file chooser, for files to attach (several at once). Resolves with their paths,
+ * or [] when cancelled. It waits for the person, so it may take a while.
+ */
+export async function chooseFiles() {
+  const r = await exec("osascript", ["-l", "JavaScript", "-e", `
+    const app = Application.currentApplication(); app.includeStandardAdditions = true;
+    [].concat(app.chooseFile({ withPrompt: "Attach to the response", multipleSelectionsAllowed: true })).map((f) => f.toString()).join("\\n");`],
+    { timeout: 600000 });
+  return r.code === 0 ? r.stdout.split("\n").map((l) => l.trim()).filter(Boolean) : [];
+}
+
+/**
+ * Uploads a file to Codebase (POST /uploads, multipart files[]) and returns its token, for
+ * postNote's uploadTokens. The file goes up under its own name, made safe for curl's form
+ * syntax (a copy in a temporary folder); the key goes to curl on stdin, never on its command line.
+ */
+export async function uploadFile(creds, path) {
+  const name = (path.split("/").pop() ?? "").replace(/[^\p{L}\p{N} ._()+-]/gu, "_").replace(/^[\s.-]+/, "") || "attachment";
+  const r = await exec("/bin/sh", ["-c", [
+    'set -e',
+    'test -f "$2" || { printf "Not a file: %s\\n" "$2" >&2; exit 2; }',
+    'dir=$(mktemp -d); trap \'rm -rf "$dir"\' EXIT',
+    'cp "$2" "$dir/$3"',
+    'key=$(security find-generic-password -s "$5" -w)',
+    // A quoted value in curl's config: backslashes and quotes escaped.
+    'printf \'user = "%s"\\n\' "$(printf %s "$1:$key" | sed \'s/[\\\\"]/\\\\&/g\')" | curl -sS --fail-with-body -K - -H "Accept: application/json" -F "files[]=@$dir/$3" "$4"',
+  ].join("\n"), "sh", creds.user, path, name, `${API}/uploads`, SERVICE], { timeout: 300000 });
+  if (r.code !== 0) throw new Error((r.stderr || r.stdout || "").trim().split("\n").pop() || `${name} could not be uploaded.`);
+  // JSON, or XML from an older API: the identifier either way.
+  const token = /"identifier"\s*:\s*"([^"]+)"/.exec(r.stdout)?.[1] ?? /<identifier>([^<]+)<\/identifier>/.exec(r.stdout)?.[1];
+  if (!token) throw new Error(`Codebase did not say where ${name} went.`);
+  return token;
+}
+
 /** Shows an attachment in macOS Quick Look, outside Herdr: every page and sheet as macOS draws it. */
 export async function quickLook(creds, appHome, id, name) {
   const file = await downloadAttachment(creds, appHome, id, name);
@@ -730,8 +765,10 @@ export async function updateTicket(creds, project, id, changes) {
 }
 
 /** Posts a response on a ticket: a note with text (Markdown) and any changes ({ status_id: 3, … }). */
-export async function postNote(creds, project, id, content, changes = {}) {
+export async function postNote(creds, project, id, content, changes = {}, uploadTokens = []) {
   const note = Object.keys(changes).length ? { content, changes } : { content };
+  // Files uploaded first (uploadFile), attached to the note by their tokens.
+  if (uploadTokens.length) note.upload_tokens = uploadTokens;
   await request(creds, "POST", `/${encodeURIComponent(project)}/tickets/${id}/notes`, { ticket_note: note });
 }
 
