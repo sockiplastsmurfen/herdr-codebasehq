@@ -12,11 +12,11 @@
 // Neither is ever written to the mod's folder.
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, TextareaState, Textarea, Progress, ProgressTrack, ProgressIndicator } from "gpui-base";
-import { focused, spaces, panes, theme, checking, props, notify, run, shared, setShared, appHome, layout } from "herdr";
+import { focused, spaces, panes, theme, checking, props, notify, run, shared, setShared, appHome, layout, nextCommand } from "herdr";
 import {
   loadCredentials, saveCredentials, forgetCredentials, accountOf, usernameOf,
   ticketPage, projects, repoOf, ticketUrl, ticketsUrl, ago, ApiError, defaultBase, normalizeBase, choices,
-  accountUsers, createTicket, findProjectCheckout, repositories, cloneRepository, expandHome,
+  accountUsers, createTicket, findProjectCheckout, repositories, cloneRepository, expandHome, ticketNotes,
 } from "./codebase.js";
 import {
   TITLES, FIELDS, personBadge, wantPictures, CHANGED, copyId, announceChange,
@@ -140,6 +140,7 @@ export default class Tickets extends View {
     cx.timer.every(WATCH, (cx) => { this.watch(cx); this.followChanges(cx); });
     cx.timer.every(REFRESH, (cx) => this.load(cx, "timer"));
     cx.timer.every(NOTICE, (cx) => this.notice(cx));
+    if (!checking()) cx.spawn((cx) => this.followCommands(cx));
   }
 
   // --- where we are ------------------------------------------------------------
@@ -575,14 +576,23 @@ export default class Tickets extends View {
 
   /**
    * Tickets changed where this mod doesn't hear of it (by Claude, in Codebase's web UI): asks for
-   * the project's most recently updated tickets, whatever the filter, and reloads when one is
-   * newer than last time. The ticket pane and the board hear of it too. Not in All projects,
-   * where it would be one request per project.
+   * a project's most recently updated tickets, whatever the filter, and when one is newer than
+   * last time, tells the board and the ticket pane, reloads the list (the shown project's) and
+   * says so for new notes by others on your tickets (noteNotices). In a project: that project.
+   * In All projects: the projects your listed tickets are in, one per look (reloading them all
+   * would be one request per project).
    */
   notice(cx) {
     const p = this.project();
-    if (!p || p.all || !this.creds || this.noticing) return;
-    const project = p.permalink;
+    if (!p || !this.creds || this.noticing) return;
+    let project = p.permalink;
+    if (p.all) {
+      const me = usernameOf(this.creds)?.toLowerCase();
+      const mine = [...new Set((this.entryFor(ALL).tickets ?? []).filter((k) => this.isMine(k, me)).map((k) => k.project))];
+      if (!mine.length) return;
+      this.noticeTurn = ((this.noticeTurn ?? -1) + 1) % mine.length;
+      project = mine[this.noticeTurn];
+    }
     this.noticing = true;
     cx.spawn(async (cx) => {
       try {
@@ -591,14 +601,66 @@ export default class Tickets extends View {
         const before = this.newest.get(project);
         this.newest.set(project, Math.max(newest, before ?? 0));
         if (before !== undefined && newest > before) {
-          const ids = tickets.filter((k) => k.updated > before).map((k) => k.id);
-          announceChange(this.me, project, ids);
-          this.reloadAll(cx);
+          const changed = tickets.filter((k) => k.updated > before);
+          announceChange(this.me, project, changed.map((k) => k.id));
+          if (!p.all) this.reloadAll(cx);
+          await this.noteNotices(project, changed, before);
         }
       } catch { /* the next look, or the refresh, catches it */ }
       this.noticing = false;
       cx.notify();
     });
+  }
+
+  /** Whether a ticket is assigned to you (me: your username, lower case). */
+  isMine(k, me = usernameOf(this.creds)?.toLowerCase()) {
+    return Boolean(me) && ((k.assignee ?? "").toLowerCase() === me || (k.assigneeId != null && k.assigneeId === this.myId()));
+  }
+
+  /** Your user id, from the account's people (once they are in). */
+  myId() {
+    const name = this.people?.byUsername?.get(usernameOf(this.creds)?.toLowerCase() ?? "");
+    return name ? this.people.idByName.get(name.toLowerCase()) ?? null : null;
+  }
+
+  /**
+   * A notification per ticket of yours (among the changed) with notes by someone else since
+   * `since`: who, and the note's first line or its changes. Clicking it shows the ticket in the
+   * ticket pane (the "codebasehq.open:<project>:<id>" command, see init). At most 3 tickets a look.
+   */
+  async noteNotices(project, changed, since) {
+    const me = this.myId();
+    const projectName = this.projectList?.find((x) => x.permalink === project)?.name ?? project;
+    for (const k of changed.filter((x) => this.isMine(x)).slice(0, 3)) {
+      const notes = (await ticketNotes(this.creds, project, k.id).catch(() => []))
+        .filter((n) => n.created > since && (me == null || n.userId !== me));
+      const n = notes[notes.length - 1];
+      if (!n) continue;
+      const who = this.people?.byId?.get(n.userId) ?? "Someone";
+      const text = (n.content ?? "").replace(/!\[[^\]]*\]\([^)]*\)/g, "").replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+        .split("\n").map((l) => l.replace(/^[#>*\-\s]+/, "").trim()).find(Boolean);
+      const changes = Object.entries(n.updates ?? {}).filter(([, v]) => Array.isArray(v)).map(([, [, to]]) => to).filter(Boolean);
+      const what = text ? (text.length > 140 ? `${text.slice(0, 139)}…` : text) : changes.length ? `Changed: ${changes.join(", ")}` : "A new note";
+      notify({
+        title: `#${k.id} ${k.summary}`.slice(0, 90), body: `${who}${notes.length > 1 ? ` (+${notes.length - 1})` : ""}: ${what}`,
+        level: "info", timeout: 15000, icon: "mods/codebasehq/ticket.svg",
+        action: { name: `codebasehq.open:${project}:${k.id}`, args: { projectName } },
+      });
+    }
+  }
+
+  /** Commands for this copy: "open:<project>:<id>" (a note notification clicked) shows that ticket. */
+  async followCommands(cx) {
+    for (;;) {
+      let c;
+      try { c = await nextCommand(); } catch { return; } // the copy is closing
+      const m = /^open:([\w.-]+):(\d+)$/.exec(c ?? "");
+      if (!m) continue;
+      const [, project, id] = m;
+      const projectName = this.projectList?.find((x) => x.permalink === project)?.name ?? project;
+      showTicket({ project, id: Number(id), uid: `${project}-${id}`, projectName }, cx);
+      cx.notify();
+    }
   }
 
   loadChoices(project, cx) {

@@ -76,6 +76,9 @@ A [Herdr](https://herdr.dev) mod for [Codebase HQ](https://www.codebasehq.com) t
   last with only the 20 most recently updated. It has the list's filters (nothing picked by
   default). Drag a card to another column to change its status; it moves back if Codebase
   refuses. Click a card's title to open the ticket pane, its details to change them.
+- **Notifications**: when someone else writes on a ticket assigned to you, a notification says
+  who and what (within 20 seconds); click it to see the ticket. In All projects, the projects
+  your listed tickets are in are looked at in turn.
 - **Changes** are saved as a Codebase note with changes, like in the web UI. The list, the
   board and the ticket pane reload each other after a change, a posted response included.
 - **People** show with their Codebase picture (from Gravatar or Codebase) where they have
