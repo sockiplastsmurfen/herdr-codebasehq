@@ -6,7 +6,7 @@ A [Herdr](https://herdr.dev) mod for [Codebase HQ](https://www.codebasehq.com) t
 
 ![The Kanban board](screenshots/kanban.png)
 
-*The screenshots show mock data: an invented shop, people and tickets.*
+*The screenshots show mock data: an invented shop, people and tickets, and drawn pictures for some of the people.*
 
 - **Project from the git remote.** The focused terminal's repo decides the project
   (`git@codebasehq.com:<account>/<project>/<repo>.git`). The **folder** icon picks another project,
