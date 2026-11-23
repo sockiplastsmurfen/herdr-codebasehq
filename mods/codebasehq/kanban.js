@@ -27,6 +27,8 @@ function change(v, k, kind, option, cx) {
   if ((k[f.id] ?? null) === (option.id ?? null) || saving.has(k.id)) { cx.notify(); return; }
   const before = setField(k, kind, option);
   k.updated = Date.now();
+  // The card may be in another column now, and first in it.
+  if (v.board) v.board.columns = null;
   saving.add(k.id);
   cx.notify();
   cx.spawn(async (cx) => {
@@ -35,6 +37,7 @@ function change(v, k, kind, option, cx) {
       announceChange(setShared, v.me, ref.project, k.id);
     } catch (e) {
       Object.assign(k, before);
+      if (v.board) v.board.columns = null;
       notify({ title: `Could not change #${k.id}`, body: errText(e), level: "error", timeout: 10000 });
     }
     saving.delete(k.id);
@@ -46,8 +49,7 @@ function change(v, k, kind, option, cx) {
 const move = (v, k, column, cx) => change(v, k, "status", column, cx);
 
 /**
- * { statuses: [{id, name, colour, closed}] (open ones in order, then the closed ones), tickets,
- * open: how many are open }. Every open ticket; of the closed ones (there can be thousands)
+ * { statuses: [{id, name, colour, closed}] (open ones in order, then the closed ones), meta, tickets }. Every open ticket; of the closed ones (there can be thousands)
  * only the most recently updated, so Completed and the like show what was just done and can
  * take a card.
  */
@@ -72,7 +74,25 @@ export async function fetchBoard(creds, project, filter = NO_FILTER) {
   const shown = (s) => (s.closed ? wantClosed : wantOpen) && (!filter.status.length || filter.status.includes(s.name));
   const statuses = [...meta.statuses.filter((s) => !s.closed), ...meta.statuses.filter((s) => s.closed)].filter(shown);
   const openIds = new Set(open.map((k) => k.id));
-  return { statuses, meta, tickets: [...open, ...closed.filter((k) => !openIds.has(k.id))], open: open.length };
+  return { statuses, meta, tickets: [...open, ...closed.filter((k) => !openIds.has(k.id))] };
+}
+
+/**
+ * The board's columns: the shown statuses in order, then any status a ticket has that isn't one
+ * of them; each with its tickets, most recently updated first. Worked out once per board (the
+ * board is drawn on every pointer move while a card is dragged), again after a card changes.
+ */
+function columnsOf(b) {
+  if (b.columns) return b.columns;
+  const columns = b.statuses.map((s) => ({ ...s, tickets: [] }));
+  const byId = new Map(columns.map((c) => [c.id, c]));
+  for (const k of [...b.tickets].sort((x, y) => y.updated - x.updated)) {
+    let c = byId.get(k.statusId);
+    if (!c) { c = { id: k.statusId, name: k.status ?? "Other", colour: k.statusColour, tickets: [] }; byId.set(k.statusId, c); columns.push(c); }
+    c.tickets.push(k);
+  }
+  b.open = b.tickets.filter((k) => !k.closed).length;
+  return (b.columns = columns);
 }
 
 /**
@@ -86,7 +106,7 @@ export function boardView(v, t, avatar) {
     .child(svg("mods/codebasehq/icons/kanban.svg").size(15).flex_none().text_color(t.muted))
     .child(div().flex_none().text_size(14).font_semibold().child("Kanban"))
     .child(div().flex_1().min_w(0).text_size(12).text_color(t.muted).truncate()
-      .child(`${ref.projectName ?? ref.project}${b?.tickets ? ` · ${b.tickets.filter((k) => !k.closed).length} open` : ""}${v.loading ? " · updating…" : ""}`));
+      .child(`${ref.projectName ?? ref.project}${b?.tickets ? ` · ${(columnsOf(b), b.open)} open` : ""}${v.loading ? " · updating…" : ""}`));
   // The same filters as the list, nothing picked unless chosen here (kept per project).
   const bar = div().pt(8).border_b(1).border_color(t.border).child(filterBar(t, {
     id: "board-filter",
@@ -102,14 +122,7 @@ export function boardView(v, t, avatar) {
   if (b?.error && !b.tickets) return root.child(note(b.error, t.ansi1));
   if (!b?.tickets) return root.child(note("Loading the board…"));
 
-  // Columns: the open statuses in order, then any status a ticket has that isn't one of them.
-  const columns = b.statuses.map((s) => ({ ...s, tickets: [] }));
-  const byId = new Map(columns.map((c) => [c.id, c]));
-  for (const k of [...b.tickets].sort((x, y) => y.updated - x.updated)) {
-    let c = byId.get(k.statusId);
-    if (!c) { c = { id: k.statusId, name: k.status ?? "Other", colour: k.statusColour, tickets: [] }; byId.set(k.statusId, c); columns.push(c); }
-    c.tickets.push(k);
-  }
+  const columns = columnsOf(b);
 
   const now = Date.now();
   const drag = v.drag; // { k, from, start, offset, at, active, over }

@@ -310,7 +310,8 @@ export async function commitsPage(creds, project, repo, branch, page) {
 }
 
 /**
- * Finds the commits behind a ticket's notes: Map noteId -> { ...commit, repo, repoName, branch }.
+ * Finds the commits behind a ticket's notes: Map noteId -> { ...commit, repo, repoName, branch,
+ * title, body } (the message as plainMessage cleans it, its first line and the rest).
  * Looks in each repository's branches named after the ticket (123, 123-…, ticket-123), else in
  * dev and the default branch, page by page until every note that could be a commit is matched
  * or the commits are older than the notes.
@@ -344,7 +345,8 @@ export async function noteCommits(creds, project, ticketId, notes) {
           const candidates = (wanted.get(msg.split("\n")[0]) ?? []).filter((n) => !found.has(n.id));
           // The same message twice: the note made closest after the commit.
           const note = candidates.sort((a, b) => Math.abs(a.created - c.at) - Math.abs(b.created - c.at))[0];
-          if (note) found.set(note.id, { ...c, repo: repo.permalink, repoName: repo.name, cloneUrl: repo.cloneUrl, branch, body: msg.split("\n").slice(1).join("\n").trim() });
+          const [title, ...rest] = msg.split("\n");
+          if (note) found.set(note.id, { ...c, repo: repo.permalink, repoName: repo.name, cloneUrl: repo.cloneUrl, branch, title, body: rest.join("\n").trim() });
         }
         if (commits[commits.length - 1].at < oldest || commits.length < 20) break;
       }

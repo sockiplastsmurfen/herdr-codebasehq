@@ -11,7 +11,7 @@ import { v_flex, h_flex, TextView, TextareaState, Textarea, ScrollHandle } from 
 import { props, shared, setShared, checking, settings, spaces, appHome, notify } from "herdr";
 import {
   loadCredentials, accountOf, ticketDetail, ticketNotes, accountUsers, ticketUrl, defaultBase, ago,
-  noteCommits, commitUrl, plainMessage as plainText, findClone, commitDiff, uploadId, downloadUpload,
+  noteCommits, commitUrl, findClone, commitDiff, uploadId, downloadUpload,
   downloadAvatars, postNote, choices, updateTicket,
 } from "./codebase.js";
 import {
@@ -96,6 +96,77 @@ function blocks(text, base) {
   return out;
 }
 
+/**
+ * A paragraph or list with @mentions, parsed once (richBlock draws it): per line its bullet
+ * (null: none), indent and pieces: { words } (bold too), { link, words }, { url }, { code },
+ * { mention, glued } (glued: the "(" or "," before the name).
+ */
+function richLines(lines) {
+  const words = (text) => text.split(/\s+/).filter(Boolean);
+  const pieces = (line) => {
+    const out = [];
+    let last = 0, m;
+    const plain = (text) => { const w = words(text); if (w.length) out.push({ words: w }); };
+    INLINE.lastIndex = 0;
+    while ((m = INLINE.exec(line))) {
+      // The character before an @mention ("(" or ",") belongs to it, not a word of its own.
+      const lead = m[6] ?? "", glued = lead.trim();
+      plain(line.slice(last, m.index) + (glued ? "" : lead));
+      if (m[1]) out.push({ link: m[2], words: words(m[1].replace(/^!/, "")) });
+      else if (m[3]) out.push({ url: m[3] });
+      else if (m[4]) out.push({ words: words(m[4]), bold: true });
+      else if (m[5]) out.push({ code: m[5] });
+      else if (m[7]) out.push({ mention: m[7], glued });
+      last = m.index + m[0].length;
+    }
+    plain(line.slice(last));
+    return out;
+  };
+  return lines.map((raw) => {
+    // ![image](url) is a link here too (Codebase only shows images to a logged-in browser).
+    const line = raw.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, "");
+    const item = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/.exec(line);
+    if (!item) return { bullet: null, indent: 0, pieces: pieces(line.trim()) };
+    return { bullet: /\d/.test(item[2]) ? item[2] : "•", indent: Math.min(item[1].replace(/\t/g, "  ").length, 12) * 5, pieces: pieces(item[3]) };
+  });
+}
+
+/**
+ * What a note shows, worked out once per note and base (render runs on every focus or
+ * shared-state change; the notes are fetched again each minute): its blocks in order, the
+ * attached images the text doesn't show, other attachments, and its field changes.
+ */
+function prepareNote(n, base) {
+  if (n.prep?.base === base) return n.prep;
+  const named = new Map(n.attachments.map((a) => [a.id, a.name]));
+  const content = blocks(n.content, base).filter((b) => b.image || b.lines || b.markdown.trim()).map((b) =>
+    b.image ? { image: { ...b.image, name: named.get(b.image.id) ?? b.image.name } }
+    : b.lines ? { rich: richLines(b.lines) }
+    : { markdown: b.markdown.trim() });
+  return (n.prep = {
+    base, content,
+    // Images in the text show where they are; attached images the text doesn't show go below,
+    // other attachments as files.
+    images: imagesBelow(n),
+    attachments: n.attachments.filter((a) => !/^image\//.test(a.type) && !content.some((b) => b.image?.id === a.id)),
+    changes: Object.entries(n.updates ?? {}).filter(([, v]) => Array.isArray(v)),
+  });
+}
+
+/** A diff's lines, sorted once: { file } headings, { info } lines shown dim, and { line, colour } (a theme key). */
+function diffRows(text) {
+  const rows = [];
+  for (const line of text.replace(/\n$/, "").split("\n")) {
+    if (line.startsWith("diff --git ")) { rows.push({ file: / b\/(.*)$/.exec(line)?.[1] ?? line.slice(11) }); continue; }
+    if (/^(index |--- |\+\+\+ |similarity index|new file mode|deleted file mode|old mode|new mode)/.test(line)) {
+      if (/^(new file|deleted file|rename (from|to))/.test(line)) rows.push({ info: line });
+      continue;
+    }
+    rows.push({ line, colour: line.startsWith("+") ? "ansi2" : line.startsWith("-") ? "ansi1" : line.startsWith("@@") ? "ansi6" : "muted" });
+  }
+  return rows;
+}
+
 /** Attached images that the text doesn't show itself: these go below the text. */
 function imagesBelow(n) {
   const inText = new Set([...(n.content ?? "").matchAll(/!\[[^\]]*\]\(([^)\s]+)\)/g)].map((m) => uploadId(m[1])).filter(Boolean));
@@ -119,7 +190,7 @@ export class Viewer {
     this.users = null;          // { byId, byUsername } -> name, for the whole account
     this.commits = new Map();   // note id -> the commit it came from (see noteCommits)
     this.checked = new Set();   // note ids already looked up (matched or not)
-    this.diffs = new Map();     // commit ref -> { loading, text, error, limit } for the opened commits
+    this.diffs = new Map();     // commit ref -> { open, loading, rows (diffRows), error, limit } for the opened commits
     this.clones = new Map();    // clone url -> local folder (or null: none here)
     this.images = new Map();    // upload id -> { open, loading, path, width, height, error }
     this.people = null;         // = this.users once loaded (wantPictures reads it)
@@ -474,19 +545,18 @@ export class Viewer {
   toggleDiff(c, cx) {
     const d = this.diffs.get(c.ref);
     if (d) { d.open = !d.open; cx.notify(); return; }
-    const entry = { open: true, loading: true, text: null, error: null, limit: DIFF_LINES };
+    const entry = { open: true, loading: true, rows: null, error: null, limit: DIFF_LINES };
     this.diffs.set(c.ref, entry);
     cx.notify();
     cx.spawn(async (cx) => {
       try {
         let folder = this.clones.get(c.cloneUrl);
         if (folder === undefined) {
-          folder = await findClone(c.cloneUrl, spaces().map((x) => x.folder).filter((f) => f && !spaces().find((y) => y.folder === f)?.machine));
+          folder = await findClone(c.cloneUrl, spaces().filter((s) => s.folder && !s.machine).map((s) => s.folder));
           this.clones.set(c.cloneUrl, folder);
         }
         if (!folder) throw new Error(`No local clone of ${c.repoName} was found next to your spaces' folders. Open the commit in Codebase instead.`);
-        entry.text = await commitDiff(folder, c.ref, c.branch);
-        entry.folder = folder;
+        entry.rows = diffRows(await commitDiff(folder, c.ref, c.branch));
       } catch (e) {
         entry.error = errText(e);
       }
@@ -532,85 +602,48 @@ export class Viewer {
         : image(d.path).w_full().h(240)));
   }
 
-  /** A diff, line by line: files as headings, additions green, removals red, hunks dim. */
+  /** A diff (diffRows), line by line: files as headings, additions green, removals red, hunks dim. */
   diffView(t, c, d, mono) {
     if (d.loading) return div().py(6).text_size(12).text_color(t.dim).child("Loading the diff…");
     if (d.error) return div().py(6).text_size(12).text_color(t.ansi1).child(d.error);
-    const all = d.text.replace(/\n$/, "").split("\n");
-    const lines = all.slice(0, d.limit);
-    const rows = [];
-    lines.forEach((line, i) => {
-      if (line.startsWith("diff --git ")) {
-        const path = / b\/(.*)$/.exec(line)?.[1] ?? line.slice(11);
-        rows.push(div().mt(i ? 10 : 0).mb(2).px(8).py(3).rounded(4).bg(t.surface).font_semibold().text_color(t.foreground).child(path));
-        return;
-      }
-      if (/^(index |--- |\+\+\+ |similarity index|new file mode|deleted file mode|old mode|new mode)/.test(line)) {
-        if (/^(new file|deleted file|rename (from|to))/.test(line)) rows.push(div().px(8).text_color(t.dim).child(line));
-        return;
-      }
-      const colour = line.startsWith("+") ? t.ansi2 : line.startsWith("-") ? t.ansi1 : line.startsWith("@@") ? t.ansi6 : t.muted;
-      rows.push(div().px(8).whitespace_nowrap().text_color(colour).child(line || " "));
-    });
+    const rows = d.rows.slice(0, d.limit).map((r, i) =>
+      r.file ? div().mt(i ? 10 : 0).mb(2).px(8).py(3).rounded(4).bg(t.surface).font_semibold().text_color(t.foreground).child(r.file)
+      : r.info ? div().px(8).text_color(t.dim).child(r.info)
+      : div().px(8).whitespace_nowrap().text_color(t[r.colour]).child(r.line || " "));
     return v_flex()
       .child(div().id(`diff-${c.ref}`).w_full().overflow_x_scrollbar()
         .child(v_flex().min_w_full().font_family(mono).text_size(11.5).children(rows)))
-      .when(all.length > d.limit, (el) => el.child(h_flex().pt(8).gap(8).items_center()
-        .child(div().text_size(11.5).text_color(t.dim).child(`${all.length - d.limit} more lines`))
+      .when(d.rows.length > d.limit, (el) => el.child(h_flex().pt(8).gap(8).items_center()
+        .child(div().text_size(11.5).text_color(t.dim).child(`${d.rows.length - d.limit} more lines`))
         .child(div().id(`diff-more-${c.ref}`).px(8).h(22).rounded(5).flex().items_center().text_size(12)
           .border(1).border_color(t.border).hover((s) => s.bg(t.hover))
           .on_click((_e, cx) => { d.limit += DIFF_LINES; cx.notify(); }).child("Show more"))));
   }
 
-  /** One paragraph or list with @mentions: words wrap, names in their person's colour. */
-  richBlock(t, lines, base, id) {
+  /** One paragraph or list with @mentions (richLines): words wrap, names in their person's colour. */
+  richBlock(t, rich, base, id) {
     const space = 3.6;
-    const word = (text, style) => text.split(/(\s+)/).filter((w) => w && !/^\s+$/.test(w))
-      .map((w) => style(div().mr(space).child(w)));
-    const inline = (line, key) => {
-      const els = [];
-      let last = 0, m, n = 0;
-      INLINE.lastIndex = 0;
-      const plain = (text) => els.push(...word(text, (el) => el));
-      while ((m = INLINE.exec(line))) {
-        // The character before an @mention ("(" or ",") belongs to it, not a word of its own.
-        const lead = m[6] ?? "";
-        const glued = lead.trim();
-        plain(line.slice(last, m.index) + (glued ? "" : lead));
-        const k = `${key}-${n++}`;
-        // The click comes after the loop is done (m is null by then): keep the link itself.
-        const href = m[2] ?? m[3];
-        if (m[1]) {
-          const label = m[1].replace(/^!/, "");
-          els.push(...word(label, (el) => el.text_color(t.accent)).map((el, j) => el.id(`${k}-${j}`).cursor_pointer().on_click((_e, cx) => openLink(cx, href, base))));
-        } else if (m[3]) {
-          els.push(div().id(k).mr(space).text_color(t.accent).cursor_pointer().on_click((_e, cx) => openLink(cx, href, base)).child(m[3]));
-        } else if (m[4]) {
-          els.push(...word(m[4], (el) => el.font_semibold()));
-        } else if (m[5]) {
-          els.push(div().mr(space).px(4).rounded(4).bg(t.raised).text_size(12).child(m[5]));
-        } else if (m[7]) {
-          const name = this.users?.byUsername?.get(m[7].toLowerCase());
-          els.push(h_flex().id(k).mr(space)
-            .when(Boolean(glued), (el) => el.child(div().child(glued)))
-            .child(div().font_semibold().text_color(personColour(t, name ?? m[7]).bg).child(`@${m[7]}`))
-            .tooltip(name ?? `@${m[7]}`));
-        }
-        last = m.index + m[0].length;
+    const words = (list, style) => list.map((w) => style(div().mr(space).child(w)));
+    const piece = (p, k) => {
+      if (p.link) return words(p.words, (el) => el.text_color(t.accent))
+        .map((el, j) => el.id(`${k}-${j}`).cursor_pointer().on_click((_e, cx) => openLink(cx, p.link, base)));
+      if (p.url) return [div().id(k).mr(space).text_color(t.accent).cursor_pointer().on_click((_e, cx) => openLink(cx, p.url, base)).child(p.url)];
+      if (p.code) return [div().mr(space).px(4).rounded(4).bg(t.raised).text_size(12).child(p.code)];
+      if (p.mention) {
+        const name = this.users?.byUsername?.get(p.mention.toLowerCase());
+        return [h_flex().id(k).mr(space)
+          .when(Boolean(p.glued), (el) => el.child(div().child(p.glued)))
+          .child(div().font_semibold().text_color(personColour(t, name ?? p.mention).bg).child(`@${p.mention}`))
+          .tooltip(name ?? `@${p.mention}`)];
       }
-      plain(line.slice(last));
-      return els;
+      return words(p.words, p.bold ? (el) => el.font_semibold() : (el) => el);
     };
-    return v_flex().gap(4).children(lines.map((raw, i) => {
-      // ![image](url) is a link here too (Codebase only shows images to a logged-in browser).
-      const line = raw.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, "");
-      const item = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/.exec(line);
-      const wrap = (text) => h_flex().flex_wrap().flex_1().min_w(0).children(inline(text, `${id}-${i}`));
-      if (!item) return wrap(line.trim());
-      const indent = Math.min(item[1].replace(/\t/g, "  ").length, 12) * 5;
-      return h_flex().items_start().pl(indent)
-        .child(div().w(18).flex_none().text_color(t.muted).child(/\d/.test(item[2]) ? item[2] : "•"))
-        .child(wrap(item[3]));
+    return v_flex().gap(4).children(rich.map((line, i) => {
+      const wrap = h_flex().flex_wrap().flex_1().min_w(0).children(line.pieces.flatMap((p, n) => piece(p, `${id}-${i}-${n}`)));
+      if (line.bullet == null) return wrap;
+      return h_flex().items_start().pl(line.indent)
+        .child(div().w(18).flex_none().text_color(t.muted).child(line.bullet))
+        .child(wrap);
     }));
   }
 
@@ -703,8 +736,7 @@ export class Viewer {
     const commitView = (n, c, i) => {
       const who = c.author ?? this.userName(n.userId);
       const diff = this.diffs.get(c.ref);
-      const [title, ...rest] = plainText(c.message).split("\n");
-      const body = rest.join("\n").trim();
+      if (c.md?.base !== base) c.md = { base, text: c.body ? markdown(c.body, base) : "" };
       return v_flex().id(`note-${n.id}`).flex_none().px(18).py(12).gap(8)
         .when(i > 0, (el) => el.border_t(1).border_color(t.border))
         .child(h_flex().gap(8).items_center()
@@ -725,9 +757,9 @@ export class Viewer {
               .child(div().flex_1().min_w(0).text_color(t.dim).truncate().child(c.branch))
               .child(iconLink(t, `commit-open-${n.id}`, "mods/codebasehq/external.svg",
                 (cx) => openLink(cx, commitUrl(base, this.ref.project, c.repo, c.ref)), null, "Open the commit in Codebase")))
-            .child(div().text_size(13).font_semibold().text_color(t.foreground).child(title)))
-          .when(Boolean(body), (el) => el.child(div().text_size(12).text_color(t.muted)
-            .child(TextView.markdown(`commit-body-${n.id}`, markdown(body, base)).selectable(true)
+            .child(div().text_size(13).font_semibold().text_color(t.foreground).child(c.title)))
+          .when(Boolean(c.md.text), (el) => el.child(div().text_size(12).text_color(t.muted)
+            .child(TextView.markdown(`commit-body-${n.id}`, c.md.text).selectable(true)
               .on_link_click((link, cx) => openLink(cx, link, base)))))
           .when(Boolean(diff?.open), (el) => el.child(div().pt(4).border_t(1).border_color(t.border).child(this.diffView(t, c, diff, mono)))));
     };
@@ -736,13 +768,7 @@ export class Viewer {
       const commit = this.commits.get(n.id);
       if (commit) return commitView(n, commit, i);
       const who = this.userName(n.userId);
-      const changes = Object.entries(n.updates ?? {}).filter(([, v]) => Array.isArray(v));
-      const content = blocks(n.content, base).filter((b) => b.image || b.lines || b.markdown.trim());
-      // Images in the text show where they are; attached images the text doesn't show go below,
-      // other attachments as files.
-      const images = imagesBelow(n);
-      const named = new Map(n.attachments.map((a) => [a.id, a.name]));
-      const attachments = n.attachments.filter((a) => !/^image\//.test(a.type) && !content.some((b) => b.image?.id === a.id));
+      const { content, images, attachments, changes } = prepareNote(n, base);
       return v_flex().id(`note-${n.id}`).flex_none().px(18).py(12).gap(8)
         .when(i > 0, (el) => el.border_t(1).border_color(t.border))
         .child(h_flex().gap(8).items_center()
@@ -754,10 +780,10 @@ export class Viewer {
             .child(`${UPDATE_NAMES[key] ?? key}: ${from || "—"} → ${to || "—"}`)))))
         .when(content.length > 0, (el) => el.child(v_flex().gap(10).text_size(13).text_color(t.foreground)
           .children(content.map((b, j) => b.image
-            ? this.imageView(t, n, { ...b.image, name: named.get(b.image.id) ?? b.image.name }, base)
-            : b.lines
-            ? this.richBlock(t, b.lines, base, `note-${n.id}-${j}`)
-            : TextView.markdown(`note-text-${n.id}-${j}`, b.markdown.trim()).selectable(true)
+            ? this.imageView(t, n, b.image, base)
+            : b.rich
+            ? this.richBlock(t, b.rich, base, `note-${n.id}-${j}`)
+            : TextView.markdown(`note-text-${n.id}-${j}`, b.markdown).selectable(true)
               .on_link_click((link, cx) => openLink(cx, link, base))))))
         .when(images.length > 0, (el) => el.child(v_flex().gap(6).children(images.map((img) => this.imageView(t, n, img, base)))))
         .when(attachments.length > 0, (el) => el.child(v_flex().gap(2).children(attachments.map((a, j) =>

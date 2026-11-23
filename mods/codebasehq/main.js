@@ -67,7 +67,9 @@ export default class Tickets extends View {
     this.me = copyId();         // to know our own change announcements
     this.seenChange = shared(CHANGED)?.at ?? 0;
     this.newest = new Map();    // project -> the newest ticket update seen by notice()
-    this.folderRepos = new Map(); // "<machine>\n<folder>" -> repoOf() (null: not a Codebase repo)
+    this.folderRepos = new Map(); // "<machine>\n<folder>" -> repoOf() (null: not a git repo); see repoAt
+    this.metaVersion = 0;       // counts finished loadChoices, so mergedChoices knows to merge again
+    this.merged = null;         // mergedChoices' last answer
     this.noticing = false;
     this.view = "list";         // "list" | "picker" | "setup" | "new" | "clone"
     this.cwd = undefined;
@@ -142,8 +144,7 @@ export default class Tickets extends View {
     this.cwd = cwd;
     const machine = spaces().find((s) => s.id === f?.space)?.machine ?? undefined;
     cx.spawn(async (cx) => {
-      let repo = null;
-      try { repo = await repoOf(cwd, machine); } catch { repo = null; }
+      const repo = await this.repoAt(cwd, machine);
       if (this.cwd !== cwd) return;
       this.repo = repo;
       this.load(cx, false);
@@ -314,11 +315,7 @@ export default class Tickets extends View {
     const list = spaces(), all = panes();
     // The checkout's root when the folder is in the project, else null.
     const inProject = async (s, folder) => {
-      const key = `${s.machine ?? ""}\n${folder}`;
-      if (!this.folderRepos.has(key)) {
-        this.folderRepos.set(key, await repoOf(folder, s.machine ?? undefined).catch(() => null));
-      }
-      const repo = this.folderRepos.get(key);
+      const repo = await this.repoAt(folder, s.machine ?? undefined);
       return repo?.remote?.project === project ? repo.root : null;
     };
     for (const s of list) {
@@ -331,6 +328,13 @@ export default class Tickets extends View {
       if (root) return { space: s, root };
     }
     return null;
+  }
+
+  /** repoOf(folder), asked once per folder (a manual reload asks again). */
+  async repoAt(folder, machine) {
+    const key = `${machine ?? ""}\n${folder}`;
+    if (!this.folderRepos.has(key)) this.folderRepos.set(key, await repoOf(folder, machine).catch(() => null));
+    return this.folderRepos.get(key);
   }
 
   /**
@@ -466,6 +470,20 @@ export default class Tickets extends View {
     this.reloadAll(cx);
   }
 
+  /** The Reload button: the folder's repo and git remote are looked up again too, then the list. */
+  reloadHere(cx) {
+    this.folderRepos.clear();
+    if (this.cwd) {
+      const cwd = this.cwd, machine = spaces().find((s) => s.id === focused()?.space)?.machine ?? undefined;
+      cx.spawn(async (cx) => {
+        const repo = await this.repoAt(cwd, machine);
+        if (this.cwd === cwd) this.repo = repo;
+        this.load(cx, true);
+        cx.notify();
+      });
+    } else this.load(cx, true);
+  }
+
   /** Every list is out of date: the shown one reloads now, the others when shown. */
   reloadAll(cx) {
     for (const entry of this.cache.values()) entry.at = 0;
@@ -509,6 +527,7 @@ export default class Tickets extends View {
       try { Object.assign(entry, await choices(this.creds, project)); }
       catch (e) { entry.error = errText(e); }
       entry.loading = false;
+      this.metaVersion++;
       this.wantShownPictures(cx);
       cx.notify();
     });
@@ -794,7 +813,7 @@ export default class Tickets extends View {
       this.icon(t, "project", "mods/codebasehq/icons/folder.svg", (cx) => this.openPicker(cx), `Project: ${p.name} (change)`),
       this.icon(t, "new-ticket", "mods/codebasehq/icons/plus.svg", (cx) => this.openNew(cx),
         p.all ? "New ticket (pick its project)" : `New ticket in ${p.name}`),
-      this.icon(t, "refresh", "mods/codebasehq/icons/refresh.svg", (cx) => this.load(cx, true),
+      this.icon(t, "refresh", "mods/codebasehq/icons/refresh.svg", (cx) => this.reloadHere(cx),
         entry.loading ? "Loading…" : "Reload the tickets", false, entry.loading),
       this.icon(t, "settings", "mods/codebasehq/settings.svg", (cx) => this.openSetup(cx), "Settings: Codebase API credentials and URL"),
     ]);
@@ -911,7 +930,16 @@ export default class Tickets extends View {
    * people by username).
    */
   mergedChoices() {
-    const projects = new Set((this.entryFor(ALL).tickets ?? []).map((k) => k.project));
+    // Worked out again only when the list or a project's values changed (render runs often).
+    const tickets = this.entryFor(ALL).tickets;
+    if (this.merged?.tickets === tickets && this.merged.version === this.metaVersion) return this.merged.value;
+    const value = this.mergeChoices(tickets ?? []);
+    this.merged = { tickets, version: this.metaVersion, value };
+    return value;
+  }
+
+  mergeChoices(tickets) {
+    const projects = new Set(tickets.map((k) => k.project));
     const metas = [...projects].map((x) => this.meta.get(x)).filter(Boolean);
     if (metas.some((m) => m.loading) && !metas.some((m) => m.statuses)) return { loading: true };
     const merged = { loading: false };
