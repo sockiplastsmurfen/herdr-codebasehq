@@ -109,7 +109,7 @@ Your Codebase HQ tickets in Herdr. A panel beside Files and Changes lists the ti
 
 ## Done when
 
-- `herdr-app check mods/codebasehq` passes.
+- `herdr-app check mods/codebasehq` passes, and so does `npm test` (the repo's tests, with fakes of Herdr's modules and mock data).
 - In a Codebase repo, the panel shows that project's open tickets assigned to you. Changing a filter changes the list.
 - Clicking a title opens the ticket pane with all its notes. A commit note shows as a commit, and its diff opens from a local clone.
 - Changing a status on a card, on the board or in the ticket pane's details shows up in Codebase as a note with that change.

@@ -1,0 +1,12 @@
+{
+  "name": "herdr-codebasehq",
+  "private": true,
+  "type": "module",
+  "description": "Tests for the CodebaseHQ mod for Herdr. The mod itself is mods/codebasehq/.",
+  "scripts": {
+    "test": "node test/run.mjs"
+  },
+  "engines": {
+    "node": ">=20.6"
+  }
+}

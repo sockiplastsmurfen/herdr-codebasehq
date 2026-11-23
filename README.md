@@ -124,3 +124,18 @@ and a button in your tab-bar mod (a clone of `tabs`), next to Files and Changes:
 read-only: clone them first (`herdr-app do layout.clone`, `mod.clone`).
 
 [RECIPE.md](RECIPE.md) describes the mod for an agent that builds it from scratch.
+
+## Tests
+
+```sh
+npm test            # every test file
+npm test -- board   # the files whose name has "board"
+```
+
+Node 20.6 or later, no dependencies. The mod runs as it is: a module hook gives its imports of
+Herdr's modules fakes (`test/fake/gpui.mjs` keeps what a view draws so a test can find and
+click things, `test/fake/herdr.mjs` the spaces, panes and focus Herdr would report), and its
+`codebase.js` answers from mock data (`test/fake/demo.mjs`: an invented shop, people and
+tickets) wherever it would reach Codebase, the keychain or a checkout. A handler's `cx` stops
+working after the call, as in Herdr. `git.test.mjs` runs git for real in a repository it makes,
+and `macos.test.mjs` (macOS only) makes attachment pages with the real tools, in temporary folders.
