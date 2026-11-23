@@ -33,6 +33,7 @@ const BATCH = 3;          // pages (20 tickets each) loaded at a time; "Load mor
 const ALL = "*";          // the "project" that means every active project
 const PARALLEL = 8;       // requests at a time when asking every project
 const REFRESH_ALL = 600000; // all projects means one request per project: refresh by itself less often
+const NOTICE = 20000;     // look for tickets changed elsewhere (Claude, Codebase's web UI): one request
 
 /** A ticket with its project; ticket numbers are only unique within a project, so uid is both. */
 const tag = (k, project, projectName) => ({ ...k, project, projectName: projectName ?? project, uid: `${project}-${k.id}` });
@@ -52,6 +53,8 @@ export default class Tickets extends View {
     this.creds = undefined;     // undefined: not read yet; null: none saved
     this.me = copyId();         // to know our own change announcements
     this.seenChange = shared(CHANGED)?.at ?? 0;
+    this.newest = new Map();    // project -> the newest ticket update seen by notice()
+    this.noticing = false;
     this.view = "list";         // "list" | "picker" | "setup"
     this.cwd = undefined;
     this.repo = null;           // { root, remote: {account, project} | null }
@@ -101,6 +104,7 @@ export default class Tickets extends View {
     });
     cx.timer.every(WATCH, (cx) => { this.watch(cx); this.followChanges(cx); });
     cx.timer.every(REFRESH, (cx) => this.load(cx, "timer"));
+    cx.timer.every(NOTICE, (cx) => this.notice(cx));
   }
 
   // --- where we are ------------------------------------------------------------
@@ -186,7 +190,7 @@ export default class Tickets extends View {
     if (p.all) return this.loadAll(cx, force, more);
     const search = searchOf(this.filterFor(p.permalink));
     const entry = this.entryFor(p.permalink);
-    if (entry.loading) return;
+    if (entry.loading) { if (force === true) entry.again = true; return; }
     if (!more && !force && Date.now() - entry.at < STALE) return;
     if (more && !entry.more) return;
     const first = more ? entry.pages + 1 : 1;
@@ -216,6 +220,8 @@ export default class Tickets extends View {
       entry.at = Date.now();
       entry.loading = false;
       this.wantShownPictures(cx);
+      // A change came while this loaded: what came may predate it.
+      if (entry.again) { entry.again = false; this.load(cx, true); }
       cx.notify();
     });
   }
@@ -226,7 +232,7 @@ export default class Tickets extends View {
    */
   loadAll(cx, force, more) {
     const entry = this.entryFor(ALL);
-    if (entry.loading) return;
+    if (entry.loading) { if (force === true) entry.again = true; return; }
     if (!more && !force && Date.now() - entry.at < STALE) return;
     if (force === "timer" && Date.now() - entry.at < REFRESH_ALL) return;
     if (more && !entry.more) return;
@@ -271,6 +277,8 @@ export default class Tickets extends View {
       entry.at = Date.now();
       entry.loading = false;
       this.wantShownPictures(cx);
+      // A change came while this loaded: what came may predate it.
+      if (entry.again) { entry.again = false; this.load(cx, true); }
       cx.notify();
     });
   }
@@ -310,8 +318,41 @@ export default class Tickets extends View {
     if (!c?.at || c.at <= this.seenChange) return;
     this.seenChange = c.at;
     if (c.from === this.me) return;
+    this.reloadAll(cx);
+  }
+
+  /** Every list is out of date: the shown one reloads now, the others when shown. */
+  reloadAll(cx) {
     for (const entry of this.cache.values()) entry.at = 0;
     this.load(cx, true);
+  }
+
+  /**
+   * Tickets changed where this mod doesn't hear of it (by Claude, in Codebase's web UI): asks for
+   * the project's most recently updated tickets, whatever the filter, and reloads when one is
+   * newer than last time. The ticket pane and the board hear of it too. Not in All projects,
+   * where it would be one request per project.
+   */
+  notice(cx) {
+    const p = this.project();
+    if (!p || p.all || !this.creds || this.noticing) return;
+    const project = p.permalink;
+    this.noticing = true;
+    cx.spawn(async (cx) => {
+      try {
+        const { tickets } = await ticketPage(this.creds, project, "", 1);
+        const newest = Math.max(0, ...tickets.map((k) => k.updated));
+        const before = this.newest.get(project);
+        this.newest.set(project, Math.max(newest, before ?? 0));
+        if (before !== undefined && newest > before) {
+          const ids = tickets.filter((k) => k.updated > before).map((k) => k.id);
+          announceChange(setShared, this.me, project, ids);
+          this.reloadAll(cx);
+        }
+      } catch { /* the next look, or the refresh, catches it */ }
+      this.noticing = false;
+      cx.notify();
+    });
   }
 
   loadChoices(project, cx) {

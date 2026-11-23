@@ -15,7 +15,7 @@ import {
   downloadAvatars, postNote, choices, updateTicket,
 } from "./codebase.js";
 import {
-  TITLES, FIELDS, personColour, personBadge, wantPictures, CHANGED, copyId, announceChange, errText, openLink, iconLink, fieldMark, setField,
+  TITLES, FIELDS, personColour, personBadge, wantPictures, CHANGED, copyId, announceChange, changeIsAbout, errText, openLink, iconLink, fieldMark, setField,
 } from "./ui.js";
 import { fetchBoard, boardView } from "./kanban.js";
 import { NO_FILTER, searchOf } from "./filters.js";
@@ -153,13 +153,13 @@ export class Viewer {
     cx.timer.every(REFRESH, (cx) => this.load(cx));
   }
 
-  /** A ticket changed in the panel: the board (or the ticket, if it is that one) reloads. */
+  /** A ticket changed (in the panel, or noticed by it): the board (or the ticket, if it is that one) reloads. */
   followChanges(cx) {
     const c = shared(CHANGED);
     if (!c?.at || c.at <= this.seenChange) return;
     this.seenChange = c.at;
     if (c.from === this.me || !this.ref || c.project !== this.ref.project) return;
-    if (this.ref.view === "kanban" || c.id === this.ref.id) this.load(cx);
+    if (this.ref.view === "kanban" || changeIsAbout(c, this.ref.id)) this.load(cx);
   }
 
   /** What to show: a ticket ({project, id}) or a project's board ({view: "kanban", project}). */

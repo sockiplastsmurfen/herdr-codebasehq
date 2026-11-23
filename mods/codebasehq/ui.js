@@ -138,8 +138,12 @@ export const CHANGED = "codebasehq.changed";
 let copies = 0;
 /** A token for this copy, so it can skip its own announcements. */
 export const copyId = () => `copy-${Date.now()}-${++copies}`;
-/** Tells the other copies that a ticket in a project changed. */
+/** Tells the other copies that a ticket (or several: an array of ids) in a project changed. */
 export function announceChange(setShared, from, project, id) {
-  setShared(CHANGED, { from, project, id, at: Date.now() });
+  const ids = [].concat(id);
+  setShared(CHANGED, { from, project, id: ids[0], ids, at: Date.now() });
 }
+
+/** Whether a change announcement is about this ticket. */
+export const changeIsAbout = (c, id) => (c.ids ?? [c.id]).some((x) => String(x) === String(id));
 

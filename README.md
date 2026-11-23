@@ -18,7 +18,8 @@ A [Herdr](https://herdr.dev) mod for [Codebase HQ](https://www.codebasehq.com) t
   row of details: status (name and colour), icons for priority (a flag in its colour) and
   type (Codebase's own icon; hover for the name), category with a tag, and the assignee.
   Age is on the right. The **copy icon** copies `#<id> <title>`, the **arrow icon** shows
-  the ticket in the browser. The **reload** icon reloads (it also reloads every 2 minutes).
+  the ticket in the browser. The **reload** icon reloads (it also reloads every 2 minutes, and within
+  20 seconds of a ticket changing elsewhere: by Claude, in Codebase's web UI).
 - **Filter** with the buttons above the list: resolution (Open, Closed, Open and closed),
   Assignee, Status, Priority, Category, Type and Milestone (finished milestones too, marked done).
   Pick several values in one filter; **Any** clears it, **Reset** goes back to the default
@@ -51,7 +52,7 @@ A [Herdr](https://herdr.dev) mod for [Codebase HQ](https://www.codebasehq.com) t
   default). Drag a card to another column to change its status; it moves back if Codebase
   refuses. Click a card's title to open the ticket pane, its details to change them.
 - **Changes** are saved as a Codebase note with changes, like in the web UI. The list, the
-  board and the ticket pane reload each other after a change.
+  board and the ticket pane reload each other after a change, a posted response included.
 - **People** show with their Codebase picture (from Gravatar or Codebase) where they have
   one, else with their initials on a colour of their own.
 - **Credentials** (API username `account/username` and API key, from My Profile →
