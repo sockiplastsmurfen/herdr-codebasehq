@@ -49,6 +49,9 @@ function listPath(node = layout(), trail = []) {
 const layoutNode = (id, node = layout()) =>
   node?.id === id ? node : (node?.children ?? []).map((c) => layoutNode(id, c)).find(Boolean) ?? null;
 
+/** Where a space's own project is kept among the chosen ones. */
+const spaceKey = (id) => (id ? `space:${id}` : null);
+
 /** A ticket with its project; ticket numbers are only unique within a project, so uid is both. */
 const tag = (k, project, projectName) => ({ ...k, project, projectName: projectName ?? project, uid: `${project}-${k.id}` });
 
@@ -141,6 +144,11 @@ export default class Tickets extends View {
     if (this.creds === undefined) return;
     const f = focused();
     const cwd = f?.cwd ?? null;
+    // Another space in the same folder can have a project of its own (choiceKey).
+    if (f?.space && f.space !== this.space) {
+      this.space = f.space;
+      if (cwd === this.cwd) { this.load(cx, false); cx.notify(); }
+    }
     if (cwd === this.cwd) return;
     // A pane with no folder (the ticket view, another mod) isn't somewhere else: keep showing
     // what was shown. Only the very first look settles for "outside a repo".
@@ -159,7 +167,10 @@ export default class Tickets extends View {
 
   /** Where a choice is remembered: the repo, or "" for anywhere outside one. */
   choiceKey() {
-    return this.repo?.root ?? "";
+    if (this.repo?.root) return this.repo.root;
+    // Outside a repo, a space can have a project of its own (Open without cloning).
+    const own = spaceKey(focused()?.space);
+    return own && own in this.chosen ? own : "";
   }
 
   /** What this place shows when nothing was chosen: the remote's project, else all projects. */
@@ -170,7 +181,7 @@ export default class Tickets extends View {
   project() {
     const chosen = this.chosen[this.choiceKey()];
     const permalink = chosen ?? this.defaultProject();
-    const source = chosen ? (this.repo?.root ? "chosen for this repo" : "chosen outside a repo")
+    const source = chosen ? (this.repo?.root ? "chosen for this repo" : this.choiceKey() ? "chosen for this space" : "chosen outside a repo")
       : this.repo?.remote ? "from git remote"
       : this.repo?.root ? "default: this repo has no Codebase remote"
       : "default outside a repo";
@@ -359,6 +370,9 @@ export default class Tickets extends View {
   }
 
   saveChosen() {
+    // A space's own project goes when the space does.
+    const live = new Set(spaces().map((s) => spaceKey(s.id)));
+    for (const key of Object.keys(this.chosen)) if (key.startsWith("space:") && !live.has(key)) delete this.chosen[key];
     try { localStorage.setItem("projects", JSON.stringify(this.chosen)); } catch {}
   }
 
@@ -401,6 +415,29 @@ export default class Tickets extends View {
     });
   }
 
+  /**
+   * Opens a space for the project in the default project folder (Settings), named after the
+   * project, without cloning anything. The list there shows that project: the space's own choice.
+   */
+  openWithoutClone(cx) {
+    const c = this.cloning;
+    if (!c || c.busy) return;
+    const folder = expandHome(this.projectsDir);
+    const before = new Set(spaces().map((s) => s.id));
+    this.cloning = null;
+    this.view = "list";
+    run("space.new", { folder, name: c.projectName });
+    cx.spawn(async (cx) => {
+      await this.showListIn((x) => !before.has(x.id), cx, (space) => {
+        this.chosen[spaceKey(space.id)] = c.project;
+        this.saveChosen();
+        this.load(cx, false);
+        cx.notify();
+      });
+    });
+    cx.notify();
+  }
+
   /** Clones the picked repository, then opens a space there with the list showing. */
   cloneProject(cx) {
     const c = this.cloning;
@@ -436,9 +473,11 @@ export default class Tickets extends View {
    * Shows the list once the space that `is` picks is the shown one. The tab bar puts back each
    * space's own side panel when it switches, so this waits for that before showing the list.
    */
-  async showListIn(is, cx) {
+  async showListIn(is, cx, found) {
     for (let waited = 0; waited < 3000; waited += 100) {
-      if (spaces().some((x) => x.active && is(x))) {
+      const space = spaces().find((x) => x.active && is(x));
+      if (space) {
+        found?.(space);
         await cx.sleep(500);
         this.showList();
         return;
@@ -1114,7 +1153,7 @@ export default class Tickets extends View {
       .child(this.header(t, "Clone", c.projectName, [this.button(t, "clone-back", "Back", back)]))
       .child(v_flex().id("clone").flex_1().min_h(0).overflow_y_scrollbar().px(14).pt(6).pb(14)
         .child(div().pt(8).text_size(12).text_color(t.muted)
-          .child(`No space works in ${c.projectName}, and there is no checkout of it next to your spaces' folders. Clone one of its repositories and open a space there.`))
+          .child(`No space works in ${c.projectName}, and there is no checkout of it next to your spaces' folders. Clone one of its repositories and open a space there, or open a space in the default project folder without cloning.`))
         .child(label("Repository"))
         .when(!c.repos && !c.error, (el) => el.child(this.note(t, "Loading repositories…")))
         .child(v_flex().gap(2).children((c.repos ?? []).map(row)))
@@ -1125,6 +1164,7 @@ export default class Tickets extends View {
         .when(Boolean(c.error), (el) => el.child(div().pt(10).text_size(12).text_color(t.ansi1).child(c.error)))
         .child(h_flex().pt(16).gap(8)
           .child(this.button(t, "clone-run", c.busy ? "Cloning…" : "Clone and open", (cx) => this.cloneProject(cx), true))
+          .child(this.button(t, "clone-open", "Open without cloning", (cx) => this.openWithoutClone(cx)))
           .child(this.button(t, "clone-cancel", "Cancel", back))));
   }
 

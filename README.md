@@ -16,7 +16,8 @@ A [Herdr](https://herdr.dev) mod for [Codebase HQ](https://www.codebasehq.com) t
   go to the space that works in that project (the list there then shows that project), or to open one in a local checkout of it
   (looked for in the default project folder, and in and next to your spaces' folders). Without
   one, it lists the project's repositories: pick one and a folder (the default project folder)
-  and it is cloned there, with a progress bar. The
+  and it is cloned there, with a progress bar. **Open without cloning** opens a space named after
+  the project in the default project folder instead, and the list there shows that project. The
   Tickets panel shows in that space. It refreshes by
   itself every 10 minutes instead of every 2.
 - **The project's name** is under the header; the arrow icon after it opens its tickets in Codebase.
