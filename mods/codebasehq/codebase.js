@@ -518,12 +518,12 @@ export async function startBranch(folder, name) {
  * branch from Codebase first (only adds objects; nothing checked out changes).
  */
 export async function commitDiff(folder, ref, branch) {
-  // Both come from the API and end up on git's command line: a commit id, and a branch that
-  // can't be read as an option.
+  // Both come from the API and end up on git's command line: a commit id, and a branch git takes
+  // as a plain name (not an option, and not a refspec like "+a:b", which would move a local ref).
   if (!/^[0-9a-f]{7,64}$/i.test(ref ?? "")) throw new Error("Not a commit id.");
   const show = () => exec("git", ["show", "--format=", "--patch", "--find-renames", "--no-color", "--no-ext-diff", "--no-textconv", ref], { cwd: folder, timeout: 30000 });
   let r = await show();
-  if (r.code !== 0 && branch && !branch.startsWith("-")) {
+  if (r.code !== 0 && validBranch(branch)) {
     await exec("git", ["fetch", "--quiet", "origin", branch], { cwd: folder, timeout: 120000 }).catch(() => null);
     r = await show();
   }

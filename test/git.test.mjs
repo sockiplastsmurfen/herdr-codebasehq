@@ -35,3 +35,14 @@ try {
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }
+
+// The diff's fetch takes a branch from the API: only a plain name, never a refspec or an option.
+{
+  const { commitDiff } = await import("../mods/codebasehq/codebase.js");
+  world.real = false;
+  const fetched = [];
+  world.exec = (cmd, args) => { if (args[0] === "fetch") fetched.push(args.at(-1)); return args[0] === "show" ? { code: 128, stdout: "", stderr: "fatal: bad object\n" } : undefined; };
+  for (const branch of ["+refs/heads/x:refs/heads/main", "a:b", "--upload-pack=x", "118-cookie-banner"]) await commitDiff("/tmp", "3f9c2a1e7b", branch).catch(() => null);
+  check("a refspec or an option from the API is never fetched; a plain branch is", fetched.join() === "118-cookie-banner", fetched);
+  world.exec = null;
+}
