@@ -6,13 +6,15 @@
 //   copy is the board pane instead, following shared("tickets.board"); both can be open at once.
 import { div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, TextView } from "gpui-base";
-import { exec, props, shared, setShared, checking, settings, spaces, appHome } from "herdr";
+import { props, shared, checking, settings, spaces, appHome } from "herdr";
 import {
   loadCredentials, accountOf, ticketDetail, ticketNotes, accountUsers, ticketUrl, defaultBase, ago,
   noteCommits, commitUrl, plainMessage as plainText, findClone, commitDiff, uploadId, downloadUpload,
   downloadAvatars,
 } from "./codebase.js";
-import { TITLES, typeIcon, initials, colourOf, personColour, personBadge, wantPictures, CHANGED, copyId } from "./ui.js";
+import {
+  TITLES, personColour, personBadge, wantPictures, CHANGED, copyId, errText, openLink, iconLink, fieldMark,
+} from "./ui.js";
 import { fetchBoard, boardView } from "./kanban.js";
 import { NO_FILTER, searchOf } from "./filters.js";
 
@@ -26,7 +28,6 @@ const UPDATE_NAMES = {
   deadline: "Deadline", start_on: "Start", estimated_time: "Estimate", estimated_time_string: "Estimate", tags: "Tags",
 };
 
-const errText = (e) => String(e?.message ?? e);
 const DIFF_LINES = 1500;  // a diff shows this many lines, then "Show more"
 
 function dateText(ms) {
@@ -100,6 +101,9 @@ function imagesBelow(n) {
     .map((a) => ({ id: a.id, name: a.name, url: a.url }));
 }
 
+/** Nobody, when the account's people can't be read: notes still show, with "User <id>". */
+const NO_USERS = () => ({ byId: new Map(), byUsername: new Map(), idByName: new Map(), avatars: new Map() });
+
 export class Viewer {
   init(cx) {
     this.creds = undefined;
@@ -123,6 +127,7 @@ export class Viewer {
     this.looking = false;       // looking the commits up
     this.error = null;
     this.loading = false;
+    this.boardAgain = false;    // the board's filter changed while it loaded: load it again
     this.copied = false;
     this.details = false;       // the fields are folded away until "Details" is clicked
     if (checking()) return;
@@ -136,7 +141,6 @@ export class Viewer {
     cx.timer.every(REFRESH, (cx) => this.load(cx));
   }
 
-  /** What to show: a ticket ({project, id}) or a project's board ({view: "kanban", project}). */
   /** A ticket changed in the panel: the board (or the ticket, if it is that one) reloads. */
   followChanges(cx) {
     const c = shared(CHANGED);
@@ -146,6 +150,7 @@ export class Viewer {
     if (this.ref.view === "kanban" || c.id === this.ref.id) this.load(cx);
   }
 
+  /** What to show: a ticket ({project, id}) or a project's board ({view: "kanban", project}). */
   wanted() {
     const board = props()?.view === "kanban";
     const s = shared(board ? "tickets.board" : "tickets.open");
@@ -185,7 +190,7 @@ export class Viewer {
         const [ticket, notes, users] = await Promise.all([
           ticketDetail(this.creds, ref.project, ref.id),
           ticketNotes(this.creds, ref.project, ref.id),
-          this.users ?? accountUsers(this.creds).catch(() => ({ byId: new Map(), byUsername: new Map(), idByName: new Map(), avatars: new Map() })),
+          this.users ?? accountUsers(this.creds).catch(NO_USERS),
         ]);
         this.users = users;
         if (this.ref === ref) {
@@ -224,7 +229,7 @@ export class Viewer {
       try {
         const [board, users] = await Promise.all([
           fetchBoard(this.creds, ref.project, filter),
-          this.users ?? accountUsers(this.creds).catch(() => ({ byId: new Map(), byUsername: new Map(), idByName: new Map(), avatars: new Map() })),
+          this.users ?? accountUsers(this.creds).catch(NO_USERS),
         ]);
         this.users = users;
         this.people = users;
@@ -307,7 +312,6 @@ export class Viewer {
   /** An image box: like a commit, a row to open it, and the picture, scaled to the pane. */
   imageView(t, n, img, base) {
     const d = this.images.get(img.id);
-    const url = img.url?.startsWith("/") ? base + img.url : img.url;
     const room = Math.max(120, (this.width || 480) - 36 - 26);
     const w = d?.width ? Math.min(d.width, room) : 0;
     const h = d?.width ? Math.round(w * d.height / d.width) : 0;
@@ -318,11 +322,8 @@ export class Viewer {
         .child(svg(`mods/tickets/icons/chevron-${d?.open ? "down" : "right"}.svg`).size(12).flex_none().text_color(t.dim))
         .child(svg("mods/tickets/icons/image.svg").size(13).flex_none().text_color(t.muted))
         .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(img.name))
-        .when(Boolean(url), (el) => el.child(div().id(`img-open-${n.id}-${img.id}`).flex_none().size(22).rounded(5).flex().items_center().justify_center()
-          .text_color(t.dim).hover((s) => s.bg(t.hover).text_color(t.foreground))
-          .tooltip("Open the image in the browser")
-          .on_click((_e, cx) => { cx.stop_propagation(); exec("open", [url]).catch(() => {}); })
-          .child(svg("mods/tickets/external.svg").size(13)))))
+        .when(Boolean(img.url), (el) => el.child(iconLink(t, `img-open-${n.id}-${img.id}`, "mods/tickets/external.svg",
+          (cx) => openLink(cx, img.url, base), null, "Open the image in the browser"))))
       .when(Boolean(d?.open), (el) => el.child(
         d.loading ? div().py(4).text_size(12).text_color(t.dim).child("Loading the image…")
         : d.error ? div().py(4).text_size(12).text_color(t.ansi1).child(d.error)
@@ -365,7 +366,6 @@ export class Viewer {
     const space = 3.6;
     const word = (text, style) => text.split(/(\s+)/).filter((w) => w && !/^\s+$/.test(w))
       .map((w) => style(div().mr(space).child(w)));
-    const open = (url) => exec("open", [url.startsWith("/") ? base + url : url]).catch(() => {});
     const inline = (line, key) => {
       const els = [];
       let last = 0, m, n = 0;
@@ -377,11 +377,13 @@ export class Viewer {
         const glued = lead.trim();
         plain(line.slice(last, m.index) + (glued ? "" : lead));
         const k = `${key}-${n++}`;
+        // The click comes after the loop is done (m is null by then): keep the link itself.
+        const href = m[2] ?? m[3];
         if (m[1]) {
           const label = m[1].replace(/^!/, "");
-          els.push(...word(label, (el) => el.text_color(t.accent)).map((el, j) => el.id(`${k}-${j}`).cursor_pointer().on_click(() => open(m[2]))));
+          els.push(...word(label, (el) => el.text_color(t.accent)).map((el, j) => el.id(`${k}-${j}`).cursor_pointer().on_click((_e, cx) => openLink(cx, href, base))));
         } else if (m[3]) {
-          els.push(div().id(k).mr(space).text_color(t.accent).cursor_pointer().on_click(() => open(m[3])).child(m[3]));
+          els.push(div().id(k).mr(space).text_color(t.accent).cursor_pointer().on_click((_e, cx) => openLink(cx, href, base)).child(m[3]));
         } else if (m[4]) {
           els.push(...word(m[4], (el) => el.font_semibold()));
         } else if (m[5]) {
@@ -457,7 +459,7 @@ export class Viewer {
           cx.timer.after(1500, (cx) => { this.copied = false; cx.notify(); });
           cx.notify();
         }, this.copied ? t.ansi2 : null, this.copied ? "Copied" : `Copy "#${k.id} ${k.summary}"`))
-        .child(iconButton("view-open", "mods/tickets/external.svg", () => { exec("open", [url]).catch(() => {}); }, null, "Open in Codebase")))
+        .child(iconButton("view-open", "mods/tickets/external.svg", (cx) => openLink(cx, url), null, "Open in Codebase")))
       .child(h_flex().gap(10).items_start()
         .child(div().flex_none().text_size(17).font_semibold().text_color(t.muted).child(`#${k.id}`))
         .child(div().flex_1().min_w(0).text_size(17).font_semibold().child(k.summary)))
@@ -467,9 +469,9 @@ export class Viewer {
         .child(svg(`mods/tickets/icons/chevron-${this.details ? "down" : "right"}.svg`).size(13).flex_none())
         .child(div().child("Details")))
       .when(this.details, (el) => el.child(v_flex().gap(2)
-        .child(field(TITLES.status, [div().size(7).rounded(4).flex_none().bg(colourOf(t, k.statusColour)), div().child(k.status ?? "—")]))
-        .child(field(TITLES.priority, [svg("mods/tickets/icons/flag.svg").size(13).flex_none().text_color(colourOf(t, k.priorityColour)), div().child(k.priority ?? "—")]))
-        .child(field(TITLES.type, [svg(typeIcon(k.typeIcon)).size(13).flex_none().text_color(t.muted), div().child(k.type ?? "—")]))
+        .child(field(TITLES.status, [fieldMark(t, "status", { colour: k.statusColour }, 13), div().child(k.status ?? "—")]))
+        .child(field(TITLES.priority, [fieldMark(t, "priority", { colour: k.priorityColour }, 13), div().child(k.priority ?? "—")]))
+        .child(field(TITLES.type, [fieldMark(t, "type", { icon: k.typeIcon }, 13), div().child(k.type ?? "—")]))
         .child(field(TITLES.category, div().child(k.category ?? "—")))
         .child(field(TITLES.assignee, assignee ? [avatar(assignee, 18, k.assigneeId), div().child(assignee)] : div().text_color(t.dim).child("Unassigned")))
         .child(field("Reported by", div().child(this.userName(k.reporterId, k.reporter))))
@@ -501,15 +503,12 @@ export class Viewer {
               .child(div().flex_none().px(5).rounded(4).bg(t.surface).font_family(mono).text_size(11.5).text_color(t.accent).child(c.short))
               .child(svg("mods/tickets/icons/branch.svg").size(12).flex_none().text_color(t.dim))
               .child(div().flex_1().min_w(0).text_color(t.dim).truncate().child(c.branch))
-              .child(div().id(`commit-open-${n.id}`).flex_none().size(22).rounded(5).flex().items_center().justify_center()
-                .text_color(t.dim).hover((s) => s.bg(t.hover).text_color(t.foreground))
-                .tooltip("Open the commit in Codebase")
-                .on_click((_e, cx) => { cx.stop_propagation(); exec("open", [commitUrl(base, this.ref.project, c.repo, c.ref)]).catch(() => {}); })
-                .child(svg("mods/tickets/external.svg").size(13))))
+              .child(iconLink(t, `commit-open-${n.id}`, "mods/tickets/external.svg",
+                (cx) => openLink(cx, commitUrl(base, this.ref.project, c.repo, c.ref)), null, "Open the commit in Codebase")))
             .child(div().text_size(13).font_semibold().text_color(t.foreground).child(title)))
           .when(Boolean(body), (el) => el.child(div().text_size(12).text_color(t.muted)
             .child(TextView.markdown(`commit-body-${n.id}`, markdown(body, base)).selectable(true)
-              .on_link_click((link) => { exec("open", [link]).catch(() => {}); }))))
+              .on_link_click((link, cx) => openLink(cx, link, base)))))
           .when(Boolean(diff?.open), (el) => el.child(div().pt(4).border_t(1).border_color(t.border).child(this.diffView(t, c, diff, mono)))));
     };
 
@@ -519,7 +518,6 @@ export class Viewer {
       const who = this.userName(n.userId);
       const changes = Object.entries(n.updates ?? {}).filter(([, v]) => Array.isArray(v));
       const content = blocks(n.content, base).filter((b) => b.image || b.lines || b.markdown.trim());
-      // Images (in the text or attached) show as image boxes; other attachments as files.
       // Images in the text show where they are; attached images the text doesn't show go below,
       // other attachments as files.
       const images = imagesBelow(n);
@@ -540,11 +538,11 @@ export class Viewer {
             : b.lines
             ? this.richBlock(t, b.lines, base, `note-${n.id}-${j}`)
             : TextView.markdown(`note-text-${n.id}-${j}`, b.markdown.trim()).selectable(true)
-              .on_link_click((link) => { exec("open", [link]).catch(() => {}); })))))
+              .on_link_click((link, cx) => openLink(cx, link, base))))))
         .when(images.length > 0, (el) => el.child(v_flex().gap(6).children(images.map((img) => this.imageView(t, n, img, base)))))
         .when(attachments.length > 0, (el) => el.child(v_flex().gap(2).children(attachments.map((a, j) =>
           div().id(`att-${n.id}-${j}`).text_size(12).text_color(t.accent).hover((s) => s.text_color(t.foreground))
-            .on_click(() => { if (a.url) exec("open", [a.url.startsWith("/") ? base + a.url : a.url]).catch(() => {}); })
+            .on_click((_e, cx) => openLink(cx, a.url, base))
             .child(`📎 ${a.name}`)))));
     };
 

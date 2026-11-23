@@ -1,6 +1,29 @@
-import { div, image } from "gpui-kit";
+import { div, image, svg } from "gpui-kit";
+import { notify } from "herdr";
 
-// Small pieces the list and the ticket view share.
+// Small pieces the list, the board and the ticket view share.
+
+export const errText = (e) => String(e?.message ?? e);
+
+/**
+ * Opens a link in the browser; a path ("/projects/…") is on the Codebase site at base.
+ * cx.open_url takes http(s) only, so a link in a ticket can't start an app or another handler.
+ */
+export function openLink(cx, url, base) {
+  if (!url) return;
+  const full = url.startsWith("/") && base ? base + url : url;
+  const refused = () => notify({ title: "Only web links open from tickets", body: full, level: "warning", timeout: 6000 });
+  if (!/^https?:\/\/[^\s/?#]+/i.test(full)) return refused();
+  try { cx.open_url(full); } catch { refused(); }
+}
+
+/** A bare icon button (Copy, Open), with its tooltip. A click on it goes no further. */
+export function iconLink(t, id, path, onClick, color, tip) {
+  return div().id(id).flex_none().size(22).rounded(5).flex().items_center().justify_center()
+    .text_color(color ?? t.dim).hover((s) => s.bg(t.hover).text_color(color ?? t.foreground))
+    .when(Boolean(tip), (el) => el.tooltip(tip))
+    .on_click((_e, cx) => { cx.stop_propagation(); onClick(cx); }).child(svg(path).size(13));
+}
 
 // The fields a card shows and lets you change: where their choices are in choices(), what the
 // API calls the change, and the ticket's own keys for the id, the name and a colour or icon.
@@ -14,6 +37,34 @@ export const FIELDS = {
 };
 
 export const TITLES = { status: "Status", priority: "Priority", type: "Type", category: "Category", assignee: "Assigned to" };
+
+/**
+ * Shows a picked value on a ticket at once (k changes); returns the ticket as it was, to put
+ * back if Codebase says no.
+ */
+export function setField(k, kind, option) {
+  const f = FIELDS[kind], before = { ...k };
+  k[f.id] = option.id ?? null;
+  k[f.name] = option.id == null ? null : kind === "assignee" ? option.username ?? option.name : option.name;
+  if (f.colour) k[f.colour] = option.colour ?? null;
+  // The type shows as its icon only: without this the card would look unchanged.
+  if (f.icon) k[f.icon] = option.icon ?? null;
+  if (kind === "status") k.closed = Boolean(option.closed);
+  return before;
+}
+
+/**
+ * What a field's value looks like, on a card and in its menu: a status dot, a priority flag,
+ * the type's icon, a category tag, or the person (person(o, size) draws someone).
+ */
+export function fieldMark(t, kind, o, size, person) {
+  if (kind === "status") return div().size(7).rounded(4).flex_none().bg(colourOf(t, o?.colour));
+  if (kind === "priority") return svg("mods/tickets/icons/flag.svg").size(size).flex_none().text_color(colourOf(t, o?.colour));
+  if (kind === "type") return svg(typeIcon(o?.icon)).size(size).flex_none().text_color(t.muted);
+  if (kind === "category") return svg("mods/tickets/icons/tag.svg").size(size - 1).flex_none().text_color(t.dim);
+  if (o?.id == null) return svg("mods/tickets/user.svg").size(size).flex_none().text_color(t.dim);
+  return person(o, size + 5);
+}
 
 // Codebase's type icon names -> ours.
 const TYPE_ICONS = { bug: "bug", hat: "sparkles", construction: "hammer", task: "task", lifebuoy: "lifebuoy", broom: "broom", fire: "fire" };

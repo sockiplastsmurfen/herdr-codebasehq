@@ -32,6 +32,8 @@ export async function forgetCredentials() {
 
 /** "example/jane-doe" -> "example" */
 export const accountOf = (creds) => creds?.user?.split("/")[0] ?? null;
+/** "example/jane-doe" -> "jane-doe" */
+export const usernameOf = (creds) => creds?.user?.split("/")[1] ?? null;
 
 // --- API ---------------------------------------------------------------------
 
@@ -344,11 +346,7 @@ export async function noteCommits(creds, project, ticketId, notes) {
 
 /** "git@codebasehq.com:example/x/y.git" and "https://example.codebasehq.com/x/y.git" -> "example/x/y" */
 export function remoteKey(url) {
-  const m = /^(?:\w+:\/\/)?(?:[^@/]+@)?([\w.-]*codebasehq\.com)[:/]+(.+?)(?:\.git)?\/?$/.exec((url ?? "").trim());
-  if (!m) return null;
-  const parts = m[2].split("/").filter(Boolean);
-  if (m[1] === "codebasehq.com") return parts.length >= 3 ? parts.slice(0, 3).join("/").toLowerCase() : null;
-  return parts.length >= 2 ? [m[1].split(".")[0], ...parts.slice(0, 2)].join("/").toLowerCase() : null;
+  return remoteParts(url)?.join("/").toLowerCase() ?? null;
 }
 
 /**
@@ -377,9 +375,12 @@ export async function findClone(cloneUrl, folders) {
  * branch from Codebase first (only adds objects; nothing checked out changes).
  */
 export async function commitDiff(folder, ref, branch) {
-  const show = () => exec("git", ["show", "--format=", "--patch", "--find-renames", "--no-color", "--no-ext-diff", ref], { cwd: folder, timeout: 30000 });
+  // Both come from the API and end up on git's command line: a commit id, and a branch that
+  // can't be read as an option.
+  if (!/^[0-9a-f]{7,64}$/i.test(ref ?? "")) throw new Error("Not a commit id.");
+  const show = () => exec("git", ["show", "--format=", "--patch", "--find-renames", "--no-color", "--no-ext-diff", "--no-textconv", ref], { cwd: folder, timeout: 30000 });
   let r = await show();
-  if (r.code !== 0) {
+  if (r.code !== 0 && branch && !branch.startsWith("-")) {
     await exec("git", ["fetch", "--quiet", "origin", branch], { cwd: folder, timeout: 120000 }).catch(() => null);
     r = await show();
   }
@@ -410,12 +411,13 @@ export async function downloadUpload(creds, appHome, id, name) {
     'set -e',
     'mkdir -p "$(dirname "$2")"',
     'if [ ! -s "$2" ]; then',
-    '  key=$(security find-generic-password -s herdr-codebasehq -w)',
-    '  printf \'user = "%s:%s"\\n\' "$1" "$key" | curl -sfL -K - -o "$2.part" "$3"',
+    '  key=$(security find-generic-password -s "$4" -w)',
+    // A quoted value in curl's config: backslashes and quotes escaped.
+    '  printf \'user = "%s"\\n\' "$(printf %s "$1:$key" | sed \'s/[\\\\"]/\\\\&/g\')" | curl -sfL -K - -o "$2.part" "$3"',
     '  mv "$2.part" "$2"',
     'fi',
     'sips -g pixelWidth -g pixelHeight "$2" 2>/dev/null | awk \'/pixel(Width|Height)/ { print $2 }\'',
-  ].join("\n"), "sh", creds.user, file, `${API}/uploads/${id}`], { timeout: 60000 });
+  ].join("\n"), "sh", creds.user, file, `${API}/uploads/${id}`, SERVICE], { timeout: 60000 });
   if (r.code !== 0) throw new Error((r.stderr || "").trim() || "The image could not be downloaded.");
   const [width, height] = r.stdout.trim().split("\n").map(Number);
   return { path: rel, width: width || 0, height: height || 0 };
@@ -474,11 +476,17 @@ export const ticketsUrl = (base, project) => `${base}/projects/${project}/ticket
  *   https://example.codebasehq.com/website/website.git
  */
 export function parseRemote(url) {
+  const parts = remoteParts(url);
+  return parts ? { account: parts[0], project: parts[1] } : null;
+}
+
+/** [account, project, repo] of a Codebase remote (the account is in the host for https), or null. */
+function remoteParts(url) {
   const m = /^(?:\w+:\/\/)?(?:[^@/]+@)?([\w.-]*codebasehq\.com)[:/]+(.+)$/.exec((url ?? "").trim());
   if (!m) return null;
   const parts = m[2].replace(/\.git\/?$/, "").split("/").filter(Boolean);
-  if (m[1] === "codebasehq.com") return parts.length >= 3 ? { account: parts[0], project: parts[1] } : null;
-  return parts.length >= 2 ? { account: m[1].split(".")[0], project: parts[0] } : null;
+  const all = m[1] === "codebasehq.com" ? parts : [m[1].split(".")[0], ...parts];
+  return all.length >= 3 ? all.slice(0, 3) : null;
 }
 
 /** { root, remote: {account, project} | null } for a folder, or null outside git. */

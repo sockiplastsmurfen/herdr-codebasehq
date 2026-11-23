@@ -8,8 +8,8 @@
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { notify, setShared } from "herdr";
-import { ticketPage, choices, ago, updateTicket } from "./codebase.js";
-import { colourOf, typeIcon, FIELDS, TITLES, announceChange } from "./ui.js";
+import { ticketPage, choices, ago, updateTicket, usernameOf } from "./codebase.js";
+import { colourOf, FIELDS, TITLES, announceChange, errText, setField, fieldMark } from "./ui.js";
 import { filterBar, searchOf, NO_FILTER } from "./filters.js";
 import { toggleTicket, shownTicket } from "./panes.js";
 
@@ -18,21 +18,16 @@ const RECENT_CLOSED = 1; // pages (20) of the most recently updated closed ticke
 const COLUMN = 264;      // px
 const THRESHOLD = 5;     // px the pointer moves before a press becomes a drag
 
-const errText = (e) => String(e?.message ?? e);
-
 /** Changes one field of a card: on the board at once, then in Codebase; back if that fails. */
 function change(v, k, kind, option, cx) {
-  const b = v.board, ref = v.ref, f = FIELDS[kind];
+  const ref = v.ref, f = FIELDS[kind];
   v.cardMenu = null;
-  if ((k[f.id] ?? null) === (option.id ?? null) || b.saving?.has(k.id)) { cx.notify(); return; }
-  const before = { ...k };
-  k[f.id] = option.id ?? null;
-  k[f.name] = option.id == null ? null : kind === "assignee" ? option.username ?? option.name : option.name;
-  if (f.colour) k[f.colour] = option.colour ?? null;
-  if (f.icon) k[f.icon] = option.icon ?? null;
-  if (kind === "status") k.closed = Boolean(option.closed);
+  // On the viewer, not the board: a reload while saving replaces the board.
+  const saving = (v.saving ??= new Set());
+  if ((k[f.id] ?? null) === (option.id ?? null) || saving.has(k.id)) { cx.notify(); return; }
+  const before = setField(k, kind, option);
   k.updated = Date.now();
-  b.saving = new Set([...(b.saving ?? []), k.id]);
+  saving.add(k.id);
   cx.notify();
   cx.spawn(async (cx) => {
     try {
@@ -42,7 +37,7 @@ function change(v, k, kind, option, cx) {
       Object.assign(k, before);
       notify({ title: `Could not change #${k.id}`, body: errText(e), level: "error", timeout: 10000 });
     }
-    b.saving.delete(k.id);
+    saving.delete(k.id);
     cx.notify();
   });
 }
@@ -76,7 +71,8 @@ export async function fetchBoard(creds, project, filter = NO_FILTER) {
   ]);
   const shown = (s) => (s.closed ? wantClosed : wantOpen) && (!filter.status.length || filter.status.includes(s.name));
   const statuses = [...meta.statuses.filter((s) => !s.closed), ...meta.statuses.filter((s) => s.closed)].filter(shown);
-  return { statuses, meta, tickets: [...open, ...closed.filter((k) => !open.some((o) => o.id === k.id))], open: open.length };
+  const openIds = new Set(open.map((k) => k.id));
+  return { statuses, meta, tickets: [...open, ...closed.filter((k) => !openIds.has(k.id))], open: open.length };
 }
 
 /**
@@ -97,7 +93,7 @@ export function boardView(v, t, avatar) {
     filter: v.boardFilter(ref.project),
     defaults: NO_FILTER,
     meta: b?.meta ?? (b?.error ? { error: b.error } : { loading: true }),
-    me: v.creds?.user?.split("/")[1],
+    me: usernameOf(v.creds),
     open: v.boardFilterMenu,
     setOpen: (kind, cx) => { v.boardFilterMenu = kind; cx.notify(); },
     set: (f, cx) => v.setBoardFilter(ref.project, f, cx),
@@ -118,14 +114,7 @@ export function boardView(v, t, avatar) {
   const now = Date.now();
   const drag = v.drag; // { k, from, start, offset, at, active, over }
   const meta = b.meta;
-  // What a field looks like, on a card and in its menu.
-  const mark = (kind, o) =>
-    kind === "status" ? div().size(7).rounded(4).flex_none().bg(colourOf(t, o.colour))
-    : kind === "priority" ? svg("mods/tickets/icons/flag.svg").size(12).flex_none().text_color(colourOf(t, o.colour))
-    : kind === "type" ? svg(typeIcon(o.icon)).size(12).flex_none().text_color(t.muted)
-    : kind === "category" ? svg("mods/tickets/icons/tag.svg").size(11).flex_none().text_color(t.dim)
-    : o.id == null ? svg("mods/tickets/user.svg").size(13).flex_none().text_color(t.dim)
-    : avatar(o.name, 18, o.id);
+  const mark = (kind, o) => fieldMark(t, kind, o, 12, (p, size) => avatar(p.name, size, p.id));
   const valueOf = (k, kind) => {
     const f = FIELDS[kind];
     const name = kind === "assignee" ? (k.assigneeId != null ? v.userName(k.assigneeId, k.assignee) : null) : k[f.name];
@@ -183,7 +172,7 @@ export function boardView(v, t, avatar) {
         .child(chip(k, id, "priority", interactive))
         .child(chip(k, id, "type", interactive))
         .child(chip(k, id, "category", interactive, true))
-        .child(div().flex_none().px(2).text_size(11).text_color(t.dim).child(b.saving?.has(k.id) ? "Saving…" : ago(k.updated, now)))
+        .child(div().flex_none().px(2).text_size(11).text_color(t.dim).child(v.saving?.has(k.id) ? "Saving…" : ago(k.updated, now)))
         .child(chip(k, id, "assignee", interactive)))
       .when(Boolean(open), (el) => el.child(menu(k, open)));
   };

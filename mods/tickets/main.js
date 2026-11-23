@@ -12,13 +12,16 @@
 // Neither is ever written to the mod's folder.
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, TextareaState, Textarea } from "gpui-base";
-import { exec, focused, spaces, panes, theme, checking, props, notify, run, shared, setShared, appHome, layout } from "herdr";
+import { focused, spaces, panes, theme, checking, props, notify, run, shared, setShared, appHome, layout } from "herdr";
 import {
-  loadCredentials, saveCredentials, forgetCredentials, accountOf,
+  loadCredentials, saveCredentials, forgetCredentials, accountOf, usernameOf,
   ticketPage, projects, repoOf, ticketUrl, ticketsUrl, ago, ApiError, defaultBase, normalizeBase, choices, updateTicket,
   accountUsers, downloadAvatars, createTicket,
 } from "./codebase.js";
-import { TITLES, FIELDS, typeIcon, initials, colourOf, personColour, personBadge, wantPictures, CHANGED, copyId, announceChange } from "./ui.js";
+import {
+  TITLES, FIELDS, personBadge, wantPictures, CHANGED, copyId, announceChange,
+  errText, openLink, iconLink, setField, fieldMark,
+} from "./ui.js";
 import { Viewer } from "./viewer.js";
 import { filterBar, searchOf } from "./filters.js";
 import { viewerPane, toggleTicket, toggleKanban, showTicket, shownTicket, BOARD } from "./panes.js";
@@ -30,8 +33,6 @@ const BATCH = 3;          // pages (20 tickets each) loaded at a time; "Load mor
 const ALL = "*";          // the "project" that means every active project
 const PARALLEL = 8;       // requests at a time when asking every project
 const REFRESH_ALL = 600000; // all projects means one request per project: refresh by itself less often
-
-const errText = (e) => String(e?.message ?? e);
 
 /** A ticket with its project; ticket numbers are only unique within a project, so uid is both. */
 const tag = (k, project, projectName) => ({ ...k, project, projectName: projectName ?? project, uid: `${project}-${k.id}` });
@@ -65,7 +66,9 @@ export default class Tickets extends View {
     try { this.filters = JSON.parse(localStorage.getItem("filters") ?? "{}") ?? {}; } catch { this.filters = {}; }
     this.filterMenu = null;     // the filter whose values are open under the bar
     this.people = null;         // everyone on the account (accountUsers): names and pictures
+    this.peopleLoading = false;
     this.pictures = new Map();  // user id -> picture path (or null: initials)
+    this.projectsLoading = false;
 
     this.user = InputState.new({ placeholder: "account/username" });
     this.key = InputState.new({ placeholder: "API key" });
@@ -208,8 +211,7 @@ export default class Tickets extends View {
         entry.more = hasMore;
         entry.error = null;
       } catch (e) {
-        entry.error = errText(e);
-        if (e instanceof ApiError && (e.status === 401 || e.status === 403)) { this.setupError = entry.error; this.view = "setup"; }
+        this.loadFailed(entry, e);
       }
       entry.at = Date.now();
       entry.loading = false;
@@ -264,14 +266,19 @@ export default class Tickets extends View {
         // Names for people and the filters' values come from each project's settings.
         for (const project of new Set(list.slice(0, 200).map((k) => k.project))) this.loadChoices(project, cx);
       } catch (e) {
-        entry.error = errText(e);
-        if (e instanceof ApiError && (e.status === 401 || e.status === 403)) { this.setupError = entry.error; this.view = "setup"; }
+        this.loadFailed(entry, e);
       }
       entry.at = Date.now();
       entry.loading = false;
       this.wantShownPictures(cx);
       cx.notify();
     });
+  }
+
+  /** A list couldn't be loaded: it says why; a refused key opens the settings. */
+  loadFailed(entry, e) {
+    entry.error = errText(e);
+    if (e instanceof ApiError && (e.status === 401 || e.status === 403)) { this.setupError = entry.error; this.view = "setup"; }
   }
 
   /** Everyone on the account once, for their pictures. */
@@ -331,14 +338,9 @@ export default class Tickets extends View {
   change(project, k, kind, option, cx) {
     this.menu = null;
     const f = FIELDS[kind];
-    if ((k[f.id] ?? null) === option.id || this.updating.has(k.uid)) { cx.notify(); return; }
-    const before = { ...k };
+    if ((k[f.id] ?? null) === (option.id ?? null) || this.updating.has(k.uid)) { cx.notify(); return; }
     // Show it at once; put it back if Codebase says no.
-    k[f.id] = option.id;
-    k[f.name] = option.id === null ? null : kind === "assignee" ? option.username : option.name;
-    if (f.colour) k[f.colour] = option.colour;
-    // The type shows as its icon only: without this the card would look unchanged.
-    if (f.icon) k[f.icon] = option.icon ?? null;
+    const before = setField(k, kind, option);
     this.updating.add(k.uid);
     cx.notify();
     cx.spawn(async (cx) => {
@@ -346,7 +348,6 @@ export default class Tickets extends View {
         await updateTicket(this.creds, project, k.id, { [f.change]: option.id ?? "" });
         announceChange(setShared, this.me, project, k.id);
         k.updated = Date.now();
-        if (kind === "status") k.closed = Boolean(option.closed);
         const shown = this.project().permalink;
         if (kind === "status" && option.closed && this.filterFor(shown).resolution === "open") {
           const entry = this.entryFor(shown);
@@ -437,13 +438,7 @@ export default class Tickets extends View {
     this.view = "picker";
     this.filter.set_value("");
     this.filter.focus();
-    if (!this.projectList) {
-      cx.spawn(async (cx) => {
-        try { this.projectList = await projects(this.creds); this.projectError = null; }
-        catch (e) { this.projectError = errText(e); }
-        cx.notify();
-      });
-    }
+    this.ensureProjects(cx);
     cx.notify();
   }
 
@@ -533,10 +528,6 @@ export default class Tickets extends View {
     if (panel?.id && !panel.hidden) run("layout.hide", { id: panel.id });
   }
 
-  openUrl(url) {
-    exec("open", [url]).catch(() => {});
-  }
-
   // --- drawing -----------------------------------------------------------------
 
   render() {
@@ -580,12 +571,10 @@ export default class Tickets extends View {
       .child(spin ? svg(path).size(13).spin(900) : svg(path).size(13));
   }
 
-  /** A bare icon button (Copy, Open on a card), with its tooltip. */
-  iconLink(t, id, path, onClick, color, tip) {
-    return div().id(id).flex_none().size(22).rounded(5).flex().items_center().justify_center()
-      .text_color(color ?? t.dim).hover((s) => s.bg(t.hover).text_color(color ?? t.foreground))
-      .when(Boolean(tip), (el) => el.tooltip(tip))
-      .on_click((_e, cx) => { cx.stop_propagation(); onClick(cx); }).child(svg(path).size(13));
+  /** A text field. */
+  input(t, state) {
+    return Input.new(state).h(32).px(10).rounded(7).border(1).border_color(t.input)
+      .bg(t.background).text_size(12.5).text_color(t.foreground);
   }
 
   header(t, title, subtitle, buttons) {
@@ -597,11 +586,11 @@ export default class Tickets extends View {
 
   renderList(t) {
     const p = this.project();
-    const entry = p ? this.entryFor(p.permalink) : null;
-    const tickets = entry?.tickets;
-    const resolution = p ? this.filterFor(p.permalink).resolution : "open";
+    const entry = this.entryFor(p.permalink);
+    const tickets = entry.tickets;
+    const resolution = this.filterFor(p.permalink).resolution;
     const count = tickets ? ` · ${tickets.length}${entry.more ? "+" : ""}${resolution === "all" ? "" : ` ${resolution}`}` : "";
-    const subtitle = p ? `${p.name}${count}` : "";
+    const subtitle = `${p.name}${count}`;
     const boardOpen = !p.all && Boolean(viewerPane("kanban")) && shared(BOARD)?.project === p.permalink;
     const header = this.header(t, "Tickets", subtitle, [
       ...(p.all ? [] : [this.icon(t, "kanban", "mods/tickets/icons/kanban.svg", (cx) => { if (!boardOpen) this.hideList(); toggleKanban(p, cx); cx.notify(); },
@@ -610,19 +599,18 @@ export default class Tickets extends View {
       this.icon(t, "new-ticket", "mods/tickets/icons/plus.svg", (cx) => this.openNew(cx),
         p.all ? "New ticket (pick its project)" : `New ticket in ${p.name}`),
       this.icon(t, "refresh", "mods/tickets/icons/refresh.svg", (cx) => this.load(cx, true),
-        entry?.loading ? "Loading…" : "Reload the tickets", false, Boolean(entry?.loading)),
+        entry.loading ? "Loading…" : "Reload the tickets", false, entry.loading),
       this.icon(t, "settings", "mods/tickets/settings.svg", (cx) => this.openSetup(cx), "Settings: Codebase API credentials and URL"),
     ]);
 
     let content;
-    if (entry?.error && !tickets) {
+    if (entry.error && !tickets) {
       content = this.note(t, entry.error, t.ansi1);
     } else if (!tickets) {
       content = this.note(t, "Loading tickets…");
     } else {
       const base = this.webBase();
       const now = Date.now();
-      const colour = (c) => this.colour(t, c);
       const label = (k, kind) => {
         if (kind === "assignee") {
           if (k.assigneeId == null && !k.assignee) return "Unassigned";
@@ -630,18 +618,7 @@ export default class Tickets extends View {
         }
         return k[FIELDS[kind].name] ?? "—";
       };
-      const avatar = (name, size) => name == null
-        ? svg("mods/tickets/user.svg").size(size - 4).flex_none().text_color(t.dim)
-        : div().size(size).flex_none().rounded(size / 2).bg(personColour(t, name).bg).flex().items_center().justify_center()
-          .text_size(size * 0.5).font_semibold().text_color(personColour(t, name).fg).child(initials(name));
-      // What shows for a field, on the card and in its menu: status keeps its name; the rest are icons.
-      const mark = (kind, o, size) => {
-        if (kind === "status") return div().size(size * 0.45).rounded(size).flex_none().bg(colour(o.colour));
-        if (kind === "priority") return svg("mods/tickets/icons/flag.svg").size(size).flex_none().text_color(colour(o.colour));
-        if (kind === "type") return svg(typeIcon(o.icon)).size(size).flex_none().text_color(t.muted);
-        if (kind === "category") return svg("mods/tickets/icons/tag.svg").size(size - 1).flex_none().text_color(t.dim);
-        return o.id == null ? avatar(null, size + 4) : personBadge(t, o.name, size + 4, this.pictures.get(o.id));
-      };
+      const mark = (kind, o, size) => fieldMark(t, kind, o, size, this.person(t));
       const chip = (k, kind) => {
         const f = FIELDS[kind];
         const open = this.menu?.id === k.uid && this.menu.kind === kind;
@@ -675,8 +652,9 @@ export default class Tickets extends View {
             .when(Boolean(o.closed), (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child("closes")))));
       };
       const viewing = shownTicket();
-      const card = (k, _i, _all, shown = viewing === k.uid) =>
-        v_flex().id(`ticket-${k.uid}`).flex_none().mx(10).mb(8).px(12).pt(10).pb(8).gap(6)
+      const card = (k) => {
+        const shown = viewing === k.uid;
+        return v_flex().id(`ticket-${k.uid}`).flex_none().mx(10).mb(8).px(12).pt(10).pb(8).gap(6)
           .rounded(8).border(1).border_color(shown ? t.accent : this.menu?.id === k.uid ? t.input : t.border).bg(t.raised)
           .hover((s) => s.border_color(t.input))
           .when(p.all, (el) => el.child(div().mb(-3).text_size(11).text_color(t.dim).truncate().child(k.projectName ?? k.project)))
@@ -688,13 +666,13 @@ export default class Tickets extends View {
               .on_click((_e, cx) => { toggleTicket(k, cx); cx.notify(); })
               .child(k.summary))
             .child(h_flex().flex_none().gap(2).mt(-2).mr(-6)
-              .child(this.iconLink(t, `copy-${k.uid}`, this.copied === k.uid ? "mods/tickets/check.svg" : "mods/tickets/copy.svg", (cx) => {
+              .child(iconLink(t, `copy-${k.uid}`, this.copied === k.uid ? "mods/tickets/check.svg" : "mods/tickets/copy.svg", (cx) => {
                 cx.write_to_clipboard(`#${k.id} ${k.summary}`);
                 this.copied = k.uid;
                 cx.timer.after(1500, (cx) => { if (this.copied === k.uid) { this.copied = null; cx.notify(); } });
                 cx.notify();
               }, this.copied === k.uid ? t.ansi2 : null, this.copied === k.uid ? "Copied" : `Copy "#${k.id} ${k.summary}"`))
-              .child(this.iconLink(t, `open-${k.uid}`, "mods/tickets/external.svg", () => this.openUrl(ticketUrl(base, k.project, k.id)), null, "Open in Codebase"))))
+              .child(iconLink(t, `open-${k.uid}`, "mods/tickets/external.svg", (cx) => openLink(cx, ticketUrl(base, k.project, k.id)), null, "Open in Codebase"))))
           .child(h_flex().gap(1).items_center().ml(-5)
             .child(chip(k, "status"))
             .child(chip(k, "priority"))
@@ -705,6 +683,7 @@ export default class Tickets extends View {
             .child(div().flex_none().text_size(11.5).text_color(t.dim)
               .child(this.updating.has(k.uid) ? "Saving…" : ago(k.updated, now))))
           .when(this.menu?.id === k.uid, (el) => el.child(menu(k)));
+      };
       content = v_flex()
         .when(Boolean(entry.error), (el) => el.child(this.note(t, entry.error, t.ansi1)))
         .when(tickets.length === 0, (el) => el.child(this.note(t, "No tickets match the filter.")))
@@ -720,7 +699,7 @@ export default class Tickets extends View {
       .child(v_flex().id("tickets-list").flex_1().min_h(0).overflow_y_scrollbar()
         .child(h_flex().px(14).pt(10).pb(8).gap(6).items_center()
           .child(div().flex_1().min_w(0).text_size(11.5).text_color(t.dim).truncate().child(`${p.name} · ${p.source}`))
-          .when(!p.all, (el) => el.child(this.link(t, "open-all", "All in Codebase", () => this.openUrl(ticketsUrl(this.webBase(), p.permalink))))))
+          .when(!p.all, (el) => el.child(this.link(t, "open-all", "All in Codebase", (cx) => openLink(cx, ticketsUrl(this.webBase(), p.permalink))))))
         .child(this.renderFilters(t, p.permalink))
         .child(content));
   }
@@ -743,10 +722,10 @@ export default class Tickets extends View {
     return merged;
   }
 
-  colour(t, c) {
-    return colourOf(t, c);
+  /** Draws someone (an option {id, name}): their picture, else initials. */
+  person(t) {
+    return (o, size) => personBadge(t, o.name, size, this.pictures.get(o.id));
   }
-
 
   /** The filter bar (filters.js), with this project's filter and values. */
   renderFilters(t, project) {
@@ -755,7 +734,7 @@ export default class Tickets extends View {
       filter: this.filterFor(project),
       defaults: DEFAULT_FILTER,
       meta: project === ALL ? this.mergedChoices() : this.meta.get(project),
-      me: this.creds?.user?.split("/")[1],
+      me: usernameOf(this.creds),
       open: this.filterMenu,
       setOpen: (kind, cx) => { this.filterMenu = kind; cx.notify(); },
       set: (f, cx) => this.setFilter(project, f, cx),
@@ -767,7 +746,7 @@ export default class Tickets extends View {
     const d = this.draft;
     const meta = d.project ? this.meta.get(d.project) : null;
     const label = (text) => div().pt(12).pb(5).text_size(11.5).text_color(t.dim).child(text);
-    const me = this.creds?.user?.split("/")[1];
+    const me = usernameOf(this.creds);
     const options = (kind) => {
       if (kind === "project") {
         const q = this.draftFilter.value().trim().toLowerCase();
@@ -783,13 +762,9 @@ export default class Tickets extends View {
       const users = (meta.users ?? []).filter((u) => u.id != null);
       return [{ id: null, name: "Unassigned" }, ...users.filter((u) => u.username === me), ...users.filter((u) => u.username !== me)];
     };
-    const mark = (kind, o) =>
-      kind === "status" ? div().size(7).rounded(4).flex_none().bg(colourOf(t, o?.colour))
-      : kind === "priority" ? svg("mods/tickets/icons/flag.svg").size(13).flex_none().text_color(colourOf(t, o?.colour))
-      : kind === "type" ? svg(typeIcon(o?.icon)).size(13).flex_none().text_color(t.muted)
-      : kind === "category" ? svg("mods/tickets/icons/tag.svg").size(12).flex_none().text_color(t.dim)
-      : kind === "assignee" ? (o?.id == null ? svg("mods/tickets/user.svg").size(14).flex_none().text_color(t.dim) : personBadge(t, o.name, 18, this.pictures.get(o.id)))
-      : svg("mods/tickets/ticket.svg").size(13).flex_none().text_color(t.muted);
+    const mark = (kind, o) => kind === "project"
+      ? svg("mods/tickets/ticket.svg").size(13).flex_none().text_color(t.muted)
+      : fieldMark(t, kind, o, 13, this.person(t));
     const select = (kind, title) => {
       const value = kind === "project" ? (d.project ? { name: d.projectName ?? d.project } : null) : this.draftValue(kind);
       const open = d.menu === kind;
@@ -825,16 +800,13 @@ export default class Tickets extends View {
               .child(div().flex_1().min_w(0).truncate().text_color(o.id == null ? t.muted : t.foreground).child(o.name))
               .when(Boolean(o.sub), (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(o.sub)))))))));
     };
-    const input = (state) => Input.new(state).h(32).px(10).rounded(7).border(1).border_color(t.input)
-      .bg(t.background).text_size(12.5).text_color(t.foreground);
+    const cancel = (cx) => { this.draft = null; this.view = "list"; cx.notify(); };
     return v_flex().size_full().min_h(0)
-      .child(this.header(t, "New ticket", d.projectName ?? "", [
-        this.button(t, "new-cancel", "Cancel", (cx) => { this.draft = null; this.view = "list"; cx.notify(); }),
-      ]))
+      .child(this.header(t, "New ticket", d.projectName ?? "", [this.button(t, "new-cancel", "Cancel", cancel)]))
       .child(v_flex().id("new-form").flex_1().min_h(0).overflow_y_scrollbar().px(14).pt(4).pb(14)
         .child(select("project", "Project"))
         .when(Boolean(d.project), (el) => el
-          .child(label("Subject")).child(input(this.summary))
+          .child(label("Subject")).child(this.input(t, this.summary))
           .child(label("Description"))
           .child(Textarea.new(this.description).px(10).py(6).rounded(7).border(1).border_color(t.input)
             .bg(t.background).text_size(12.5).text_color(t.foreground))
@@ -846,7 +818,7 @@ export default class Tickets extends View {
         .when(Boolean(d.error), (el) => el.child(div().pt(12).text_size(12).text_color(t.ansi1).child(d.error)))
         .child(h_flex().pt(16).gap(8)
           .child(this.button(t, "new-create", d.saving ? "Creating…" : "Create ticket", (cx) => this.submitNew(cx), true))
-          .child(this.button(t, "new-cancel-2", "Cancel", (cx) => { this.draft = null; this.view = "list"; cx.notify(); }))));
+          .child(this.button(t, "new-cancel-2", "Cancel", cancel))));
   }
 
   renderPicker(t) {
@@ -865,8 +837,7 @@ export default class Tickets extends View {
       .child(this.header(t, "Project", this.repo?.root?.split("/").pop() ?? "Outside a repo", [
         this.button(t, "picker-back", "Back", (cx) => { this.view = "list"; cx.notify(); }),
       ]))
-      .child(div().flex_none().p(10).child(Input.new(this.filter).h(32).px(10).rounded(7).border(1).border_color(t.input)
-        .bg(t.background).text_size(12.5).text_color(t.foreground)))
+      .child(div().flex_none().p(10).child(this.input(t, this.filter)))
       .child(v_flex().id("project-list").flex_1().min_h(0).overflow_y_scrollbar().pb(8)
         .when(Boolean(remote), (el) => el.child(row("pick-remote", "From git remote", remote, current === remote, (cx) => this.choose(null, cx))))
         .when(!q || "all projects".includes(q), (el) => el.child(row("pick-all", "All projects", "Every active project", current === ALL, (cx) => this.choose(ALL, cx))))
@@ -885,8 +856,7 @@ export default class Tickets extends View {
     try { base = normalizeBase(this.base.value()) ?? fallback; } catch {}
     const label = (text) => div().pt(14).pb(5).text_size(11.5).text_color(t.dim).child(text);
     const hint = (text) => div().pt(5).text_size(11).text_color(t.dim).child(text);
-    const input = (state) => Input.new(state).h(32).px(10).rounded(7).border(1).border_color(t.input)
-      .bg(t.background).text_size(12.5).text_color(t.foreground);
+    const input = (state) => this.input(t, state);
     return v_flex().size_full().min_h(0)
       .child(this.header(t, "Settings", "Codebase", this.creds
         ? [this.button(t, "setup-back", "Back", (cx) => { this.view = "list"; cx.notify(); })]
@@ -894,7 +864,7 @@ export default class Tickets extends View {
       .child(v_flex().id("setup").flex_1().min_h(0).overflow_y_scrollbar().px(14).pt(6).pb(14)
         .child(div().pt(8).text_size(12).text_color(t.muted)
           .child("Your API username and key are under My Profile → API Credentials in Codebase. They are kept in the macOS keychain, never in files."))
-        .child(h_flex().pt(6).child(this.link(t, "open-profile", "Open my Codebase profile", () => this.openUrl(`${base}/settings/profile`))))
+        .child(h_flex().pt(6).child(this.link(t, "open-profile", "Open my Codebase profile", (cx) => openLink(cx, `${base}/settings/profile`))))
         .child(label("API username"))
         .child(input(this.user))
         .child(label("API key"))
