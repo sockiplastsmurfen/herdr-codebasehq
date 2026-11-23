@@ -50,6 +50,9 @@ A [Herdr](https://herdr.dev) mod for [Codebase HQ](https://www.codebasehq.com) t
   change on the ticket: In Progress, and assigned to you if nobody has it. **Start** switches
   the checkout to the branch (a new one from origin's default branch, fetched first; an existing
   one as it is) and saves the changes as one note.
+- **Change the title** with the pencil by it in the ticket pane: Enter or Save saves it, as a
+  note with the change (Codebase's notes themselves, the description included, can't be edited
+  through its API).
 - **Commits.** Notes made by commits (`[touch:123]`) show as commits: the author, the short
   commit id, the branch and the message. Click a commit to see its diff right there, from a
   local clone (a checkout of that repository in one of your spaces' folders or next to them;

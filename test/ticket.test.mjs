@@ -58,3 +58,16 @@ await settle(6);
 const note = world.saved.find((s) => s.kind === "note");
 check("Post uploads the files first, then the note takes their tokens", note?.uploadTokens?.join() === "token-1" && note.content === "", note);
 check("the form is cleared after", v.reply.files.length === 0 && !v.reply.open);
+
+// Changing the title.
+click(v.render(t), "view-rename", cx);
+check("the pencil turns the title into a field, filled in", v.titleInput.value() === "Checkout button hides behind the cookie banner on mobile" && Boolean(find(v.render(t), "title-save")));
+v.titleInput.set_value("   ");
+click(v.render(t), "title-save", cx);
+check("an empty title is refused", /needs a title/.test(v.titleEdit?.error ?? ""));
+v.titleInput.set_value("Checkout  button hidden by the cookie banner");
+click(v.render(t), "title-save", cx);
+check("Save shows the new title at once", v.ticket.summary === "Checkout button hidden by the cookie banner");
+await settle(5);
+check("… and saves it as the change Codebase calls subject", world.saved.some((s) => s.kind === "update" && s.id === 118 && s.changes.subject === "Checkout button hidden by the cookie banner"), world.saved.at(-1));
+check("… and the field goes", v.titleEdit === null);

@@ -7,12 +7,12 @@
 //   "Post a response" (the header's speech-bubble icon) opens a form at the bottom that posts a note (Markdown) and, as in Codebase, any
 //   details picked under it (status, priority, type, category, assignee, milestone); ⌘↩ posts too.
 import { div, svg, image } from "gpui-kit";
-import { v_flex, h_flex, TextView, TextareaState, Textarea, ScrollHandle, InputState } from "gpui-base";
+import { v_flex, h_flex, TextView, TextareaState, Textarea, ScrollHandle, InputState, Input } from "gpui-base";
 import { props, shared, checking, settings, spaces, appHome, openOverlay, notify } from "herdr";
 import {
   loadCredentials, accountOf, ticketDetail, ticketNotes, accountUsers, ticketUrl, defaultBase, ago,
   noteCommits, commitUrl, findClone, commitDiff, uploadId, downloadUpload, saveToDownloads, canShow, postNote, choices,
-  chooseFiles, uploadFile,
+  chooseFiles, uploadFile, updateTicket,
 } from "./codebase.js";
 import {
   TITLES, FIELDS, personColour, personBadge, wantPictures, CHANGED, copyId, announceChange, changeIsAbout, errText, openLink,
@@ -219,6 +219,9 @@ export class Viewer {
     this.response.set_auto_grow(4, 14);
     this.response.on("submit", (e, cx) => { if (e?.secondary) this.postResponse(cx); });
     this.start = null;          // the Start work form (startwork.js), for one ticket
+    this.titleEdit = null;      // { key, saving, error } while the title is being changed
+    this.titleInput = InputState.new({ placeholder: "Title" });
+    this.titleInput.on("submit", (_e, cx) => this.saveTitle(cx));
     this.checkouts = [];        // the shown space's checkouts of the ticket's project (watchCheckouts)
     this.repos = new Map();     // folder -> repoOf(), asked once
     this.branchInput = InputState.new({ placeholder: "Branch" });
@@ -416,6 +419,58 @@ export class Viewer {
       }
       cx.notify();
     });
+  }
+
+  /** Turns the shown ticket's title into a field to change it. */
+  editTitle(cx) {
+    if (!this.ticket) return;
+    this.titleEdit = { key: this.key, saving: false, error: null };
+    this.titleInput.set_value(this.ticket.summary ?? "");
+    this.titleInput.focus();
+    cx.notify();
+  }
+
+  /**
+   * Saves the new title: Codebase changes a ticket's title with a note, the change "subject"
+   * (as its own form does). Shown at once; back, with the error, if Codebase says no.
+   */
+  saveTitle(cx) {
+    const e = this.titleEdit, k = this.ticket, ref = this.ref;
+    const title = this.titleInput.value().trim().replace(/\s+/g, " ");
+    if (!e || e.saving || !k) return;
+    if (!title) { e.error = "A ticket needs a title."; cx.notify(); return; }
+    if (title === k.summary) { this.titleEdit = null; cx.notify(); return; }
+    const before = k.summary;
+    k.summary = title;
+    e.saving = true; e.error = null;
+    cx.notify();
+    cx.spawn(async (cx) => {
+      try {
+        await updateTicket(this.creds, ref.project, ref.id, { subject: title });
+        announceChange(this.me, ref.project, ref.id);
+        if (this.titleEdit === e) this.titleEdit = null;
+        if (this.key === e.key) this.reload(cx);
+      } catch (err) {
+        k.summary = before;
+        e.saving = false;
+        e.error = errText(err);
+      }
+      cx.notify();
+    });
+  }
+
+  /** The title as a field, with Save and Cancel (Enter saves). */
+  titleEditor(t) {
+    const e = this.titleEdit;
+    const button = (id, label, onClick, strong) => textButton(t, id, label, onClick, strong, 28);
+    return v_flex().gap(6).py(2)
+      .child(h_flex().gap(6).items_center()
+        .child(div().flex_none().text_size(15).font_semibold().text_color(t.muted).child(`#${this.ticket.id}`))
+        .child(div().flex_1().min_w(0).child(Input.new(this.titleInput).h(30).px(8).rounded(6).border(1).border_color(t.accent)
+          .bg(t.background).text_size(14).font_semibold()))
+        .child(button("title-save", e.saving ? "Saving…" : "Save", (cx) => this.saveTitle(cx), true))
+        .child(button("title-cancel", "Cancel", (cx) => { if (!e.saving) this.titleEdit = null; cx.notify(); })))
+      .when(Boolean(e.error), (el) => el.child(div().text_size(12).text_color(t.ansi1).child(e.error)));
   }
 
   /** Adds files to the shown ticket's response (from the chooser, or dropped on the form). */
@@ -787,7 +842,8 @@ export class Viewer {
         }, null, "Go to the latest note"))
         .child(iconButton("view-respond", "mods/codebasehq/icons/reply.svg", (cx) => this.toggleResponse(cx),
           this.reply.open ? t.accent : null, this.reply.open ? "Fold the response away (the text stays)" : "Post a response", this.reply.open)))
-      .child(h_flex().gap(6).items_start()
+      .when(this.titleEdit?.key === this.key, (el) => el.child(this.titleEditor(t)))
+      .when(this.titleEdit?.key !== this.key, (el) => el.child(h_flex().gap(6).items_start()
         .child(h_flex().id("details-toggle").flex_1().min_w(0).ml(-6).px(6).py(2).gap(6).rounded(5).items_start().cursor_pointer()
           .text_size(15).font_semibold().hover((s) => s.bg(t.hover))
           .tooltip(this.details ? "Hide the details" : "Show the details")
@@ -804,7 +860,8 @@ export class Viewer {
             cx.timer.after(1500, (cx) => { this.copied = false; cx.notify(); });
             cx.notify();
           }, this.copied ? t.ansi2 : null, this.copied ? "Copied" : `Copy "#${k.id} ${k.summary}"`))
-          .child(iconButton("view-open", "mods/codebasehq/external.svg", (cx) => openLink(cx, url), null, "Open in Codebase"))))
+          .child(iconButton("view-open", "mods/codebasehq/external.svg", (cx) => openLink(cx, url), null, "Open in Codebase"))
+          .child(iconButton("view-rename", "mods/codebasehq/icons/pencil.svg", (cx) => this.editTitle(cx), null, "Change the title")))))
       .when(this.details, (el) => el.child(v_flex().pt(6).gap(2)
         .children(["status", "priority", "type", "category", "assignee", "milestone"].map(detail))
         .child(field("Reported by", div().child(this.userName(k.reporterId, k.reporter))))
