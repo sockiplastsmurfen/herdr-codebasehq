@@ -36,6 +36,9 @@ in the right-hand panel next to Files and Changes.
 - **Change status, priority, type, category or assignee** by clicking it on a card: the project's own values
   open below it (statuses that close the ticket say so). The change is saved as a
   Codebase note with changes, like in the web UI; a closed ticket leaves the list.
+- **People** show with their Codebase picture (from Gravatar or Codebase) where they have
+  one, else with their initials on a colour of their own. Pictures are downloaded once into
+  `~/.config/herdr-app/data/tickets-images/avatars/`.
 - **Credentials** (API username `account/username` and API key, from My Profile →
   API Credentials in Codebase) are entered in the panel the first time and kept in the
   macOS keychain under the service `herdr-codebasehq`.

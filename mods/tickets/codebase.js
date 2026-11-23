@@ -191,17 +191,77 @@ export async function ticketNotes(creds, project, id) {
   }).sort((a, b) => a.created - b.created);
 }
 
-/** Everyone on the account: { byId: id -> "First Last", byUsername: username -> "First Last" }. */
+/**
+ * Everyone on the account: { byId: id -> "First Last", byUsername: username -> name,
+ * idByName: lower-case name -> id, avatars: id -> picture URL }. (The answer also holds other
+ * people's API keys: only these fields are kept.)
+ */
 export async function accountUsers(creds) {
   const data = (await get(creds, "/users")) ?? [];
-  const byId = new Map(), byUsername = new Map();
+  const byId = new Map(), byUsername = new Map(), idByName = new Map(), avatars = new Map();
   for (const row of data) {
     const u = row.user ?? row;
     const name = [u.first_name, u.last_name].filter(Boolean).join(" ") || u.username || `User ${u.id}`;
     byId.set(u.id, name);
+    idByName.set(name.toLowerCase(), u.id);
     if (u.username) byUsername.set(u.username.toLowerCase(), name);
+    if (u.gravatar_url) avatars.set(u.id, u.gravatar_url);
   }
-  return { byId, byUsername };
+  return { byId, byUsername, idByName, avatars };
+}
+
+// Codebase's picture for someone who hasn't set one: a grey silhouette. Initials say more.
+// (Gravatar pictures are asked for with default=404, so someone without one gets none.)
+const NO_PICTURE = "8236ec7cbf20638956735d247397b207bb929c6519be6d163fc60799acb867e1";
+
+/**
+ * A picture URL at 64 px: Gravatar's "?size=35&default=mm" becomes "size=64&default=404" (no
+ * stand-in picture); Codebase's own ".../avatar/<id>/35" becomes ".../64".
+ */
+function pictureUrl(url) {
+  if (/gravatar\.com\//.test(url)) {
+    let u = /[?&]size=\d+/.test(url) ? url.replace(/([?&])size=\d+/, "$1size=64") : `${url}${url.includes("?") ? "&" : "?"}size=64`;
+    u = /[?&]default=[^&]*/.test(u) ? u.replace(/([?&])default=[^&]*/, "$1default=404") : `${u}&default=404`;
+    return u;
+  }
+  return url.replace(/\/\d+$/, "/64");
+}
+
+/**
+ * Downloads people's pictures once into <appHome>/data/tickets-images/avatars/ (in one go).
+ * people: [{ id, url }]. Returns Map id -> path for image() (relative to appHome), or null
+ * for no picture (none set, Codebase's silhouette, or it couldn't be fetched; remembered with a
+ * ".none" file so it isn't asked again).
+ */
+export async function downloadAvatars(appHome, people) {
+  const out = new Map();
+  const list = people.filter((p) => Number.isInteger(p.id) && /^https:\/\//.test(p.url ?? ""))
+    .map((p) => ({ ...p, url: pictureUrl(p.url) }));
+  if (!list.length) return out;
+  const dir = `${appHome}/data/tickets-images/avatars`;
+  const script = [
+    'dir="$1"; none="$2"; shift 2',
+    'mkdir -p "$dir"',
+    'while [ "$#" -gt 1 ]; do',
+    '  id="$1"; url="$2"; shift 2',
+    '  if [ -e "$dir/$id.none" ]; then echo "$id"; continue; fi',
+    '  found=$(ls "$dir/$id"-*.png "$dir/$id"-*.jpg "$dir/$id"-*.gif "$dir/$id"-*.webp 2>/dev/null | head -n 1)',
+    '  if [ -n "$found" ]; then printf "%s\\t%s\\n" "$id" "${found##*/}"; continue; fi',
+    '  type=$(curl -sfL --max-time 10 -o "$dir/$id.part" -w "%{content_type}" "$url") || type=""',
+    '  case "$type" in *png*) ext=png;; *jpeg*|*jpg*) ext=jpg;; *gif*) ext=gif;; *webp*) ext=webp;; *) ext="";; esac',
+    '  sum=$(shasum -a 256 "$dir/$id.part" 2>/dev/null | cut -c1-64)',
+    '  if [ -n "$ext" ] && [ "$sum" != "$none" ]; then',
+    // The content's hash in the name: a changed picture is a new path (the app keeps images by path).
+    '    file="$id-$(printf %s "$sum" | cut -c1-10).$ext"; mv "$dir/$id.part" "$dir/$file"; printf "%s\\t%s\\n" "$id" "$file"',
+    '  else rm -f "$dir/$id.part"; : > "$dir/$id.none"; echo "$id"; fi',
+    'done',
+  ].join("\n");
+  const r = await exec("/bin/sh", ["-c", script, "sh", dir, NO_PICTURE, ...list.flatMap((p) => [String(p.id), p.url])], { timeout: 120000 });
+  for (const line of (r.stdout ?? "").split("\n")) {
+    const [id, file] = line.split("\t");
+    if (id) out.set(Number(id), file ? `data/tickets-images/avatars/${file}` : null);
+  }
+  return out;
 }
 
 // --- commits -----------------------------------------------------------------

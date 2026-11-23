@@ -9,8 +9,9 @@ import { exec, props, shared, checking, settings, spaces, appHome } from "herdr"
 import {
   loadCredentials, accountOf, ticketDetail, ticketNotes, accountUsers, ticketUrl, defaultBase, ago,
   noteCommits, commitUrl, plainMessage as plainText, findClone, commitDiff, uploadId, downloadUpload,
+  downloadAvatars,
 } from "./codebase.js";
-import { TITLES, typeIcon, initials, colourOf, personColour } from "./ui.js";
+import { TITLES, typeIcon, initials, colourOf, personColour, personBadge, wantPictures } from "./ui.js";
 
 const CHECK = 300;        // look at shared("tickets.open") (no request unless it changed)
 const REFRESH = 60000;    // new notes
@@ -109,6 +110,8 @@ export class Viewer {
     this.diffs = new Map();     // commit ref -> { loading, text, error, limit } for the opened commits
     this.clones = new Map();    // clone url -> local folder (or null: none here)
     this.images = new Map();    // upload id -> { open, loading, path, width, height, error }
+    this.people = null;         // = this.users once loaded (wantPictures reads it)
+    this.pictures = new Map();  // user id -> picture path (or null: initials)
     this.width = 0;             // the pane's width, for scaling images
     this.looking = false;       // looking the commits up
     this.error = null;
@@ -158,12 +161,15 @@ export class Viewer {
         const [ticket, notes, users] = await Promise.all([
           ticketDetail(this.creds, ref.project, ref.id),
           ticketNotes(this.creds, ref.project, ref.id),
-          this.users ?? accountUsers(this.creds).catch(() => ({ byId: new Map(), byUsername: new Map() })),
+          this.users ?? accountUsers(this.creds).catch(() => ({ byId: new Map(), byUsername: new Map(), idByName: new Map(), avatars: new Map() })),
         ]);
         this.users = users;
         if (this.ref === ref) {
           this.ticket = ticket; this.notes = notes; this.error = null;
           this.findCommits(ref, notes, cx);
+          // Pictures for the people shown: note authors, the assignee, the reporter.
+          this.people = users;
+          wantPictures(this, [...notes.map((n) => n.userId), ticket.assigneeId, ticket.reporterId], cx, downloadAvatars, appHome());
         }
       } catch (e) {
         if (this.ref === ref) this.error = errText(e);
@@ -186,6 +192,7 @@ export class Viewer {
         const found = await noteCommits(this.creds, ref.project, ref.id, fresh);
         if (this.ref === ref) {
           for (const [id, c] of found) this.commits.set(id, c);
+          wantPictures(this, [...found.values()].map((c) => this.users?.idByName?.get((c.author ?? "").toLowerCase())), cx, downloadAvatars, appHome());
           for (const n of fresh) this.checked.add(n.id);
         }
       } catch { /* the notes still show as notes */ }
@@ -362,8 +369,12 @@ export class Viewer {
       div().id(id).flex_none().size(26).rounded(6).flex().items_center().justify_center()
         .text_color(color ?? t.dim).hover((s) => s.bg(t.hover).text_color(color ?? t.foreground))
         .on_click((_e, cx) => onClick(cx)).child(svg(path).size(14));
-    const avatar = (name, size) => div().size(size).flex_none().rounded(size / 2).bg(personColour(t, name).bg)
-      .flex().items_center().justify_center().text_size(size * 0.42).font_semibold().text_color(personColour(t, name).fg).child(initials(name));
+    // A person's badge: their picture when they have one (by id, or found by name for commit
+    // authors), else initials.
+    const avatar = (name, size, id) => {
+      const uid = id ?? this.users?.idByName?.get((name ?? "").toLowerCase());
+      return personBadge(t, name, size, uid != null ? this.pictures.get(uid) : null);
+    };
 
     const field = (label, value) => h_flex().gap(8).min_h(22).items_center()
       .child(div().w(96).flex_none().text_size(12).text_color(t.dim).child(label))
@@ -394,7 +405,7 @@ export class Viewer {
         .child(field(TITLES.priority, [svg("mods/tickets/icons/flag.svg").size(13).flex_none().text_color(colourOf(t, k.priorityColour)), div().child(k.priority ?? "—")]))
         .child(field(TITLES.type, [svg(typeIcon(k.typeIcon)).size(13).flex_none().text_color(t.muted), div().child(k.type ?? "—")]))
         .child(field(TITLES.category, div().child(k.category ?? "—")))
-        .child(field(TITLES.assignee, assignee ? [avatar(assignee, 18), div().child(assignee)] : div().text_color(t.dim).child("Unassigned")))
+        .child(field(TITLES.assignee, assignee ? [avatar(assignee, 18, k.assigneeId), div().child(assignee)] : div().text_color(t.dim).child("Unassigned")))
         .child(field("Reported by", div().child(this.userName(k.reporterId, k.reporter))))
         .when(Boolean(k.milestone), (el) => el.child(field("Milestone", div().child(k.milestone))))
         .child(field("Created", div().child(`${dateText(k.created)} · updated ${ago(k.updated)} ago`)))));
@@ -451,7 +462,7 @@ export class Viewer {
       return v_flex().id(`note-${n.id}`).flex_none().px(18).py(12).gap(8)
         .when(i > 0, (el) => el.border_t(1).border_color(t.border))
         .child(h_flex().gap(8).items_center()
-          .child(avatar(who, 22))
+          .child(avatar(who, 22, n.userId))
           .child(div().flex_1().min_w(0).text_size(12.5).font_semibold().truncate().child(who))
           .child(div().id(`note-time-${n.id}`).flex_none().text_size(11.5).text_color(t.dim).tooltip(dateText(n.created)).child(ago(n.created))))
         .when(changes.length > 0, (el) => el.child(v_flex().gap(2).children(changes.map(([key, [from, to]]) =>

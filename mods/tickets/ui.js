@@ -1,3 +1,5 @@
+import { div, image } from "gpui-kit";
+
 // Small pieces the list and the ticket view share.
 
 export const TITLES = { status: "Status", priority: "Priority", type: "Type", category: "Category", assignee: "Assigned to" };
@@ -34,4 +36,34 @@ export function personColour(t, name) {
   // The colour solid, the initials in the theme's background: dark on light colours in a
   // dark theme, light on the darker colours a light theme has.
   return { bg: palette[h % palette.length].slice(0, 7), fg: t.background };
+}
+
+/**
+ * A person's round badge: their Codebase picture when they have one (path from
+ * downloadAvatars), else their initials on their colour.
+ */
+export function personBadge(t, name, size, picture) {
+  if (picture) return image(picture).size(size).flex_none().rounded(size / 2);
+  const c = personColour(t, name);
+  return div().size(size).flex_none().rounded(size / 2).bg(c.bg).flex().items_center().justify_center()
+    .text_size(size * 0.45).font_semibold().text_color(c.fg).child(initials(name));
+}
+
+/**
+ * Keeps people's pictures for a view: owner.people (from accountUsers) says who has one,
+ * owner.pictures (Map id -> path | null) what has been downloaded. Asks only for the new ones.
+ */
+export function wantPictures(owner, ids, cx, download, home) {
+  if (!owner.people) return;
+  owner.picturesAsked ??= new Set();
+  const list = [...new Set(ids)].filter((id) => id != null && !owner.picturesAsked.has(id) && owner.people.avatars.has(id));
+  if (!list.length) return;
+  for (const id of list) owner.picturesAsked.add(id);
+  cx.spawn(async (cx) => {
+    try {
+      const got = await download(home, list.map((id) => ({ id, url: owner.people.avatars.get(id) })));
+      for (const [id, path] of got) owner.pictures.set(id, path);
+    } catch { /* initials stay */ }
+    cx.notify();
+  });
 }

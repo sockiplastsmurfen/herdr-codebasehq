@@ -12,12 +12,13 @@
 // Neither is ever written to the mod's folder.
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
-import { exec, focused, spaces, panes, theme, checking, props, notify, run, shared, setShared } from "herdr";
+import { exec, focused, spaces, panes, theme, checking, props, notify, run, shared, setShared, appHome } from "herdr";
 import {
   loadCredentials, saveCredentials, forgetCredentials, accountOf,
   ticketPage, projects, repoOf, ticketUrl, ticketsUrl, ago, ApiError, defaultBase, normalizeBase, choices, updateTicket,
+  accountUsers, downloadAvatars,
 } from "./codebase.js";
-import { TITLES, typeIcon, initials, colourOf, personColour } from "./ui.js";
+import { TITLES, typeIcon, initials, colourOf, personColour, personBadge, wantPictures } from "./ui.js";
 import { Viewer } from "./viewer.js";
 
 const WATCH = 1500;       // how often to look at which folder is focused (no exec unless it changed)
@@ -79,6 +80,8 @@ export default class Tickets extends View {
     try { this.chosen = JSON.parse(localStorage.getItem("projects") ?? "{}") ?? {}; } catch { this.chosen = {}; }
     try { this.filters = JSON.parse(localStorage.getItem("filters") ?? "{}") ?? {}; } catch { this.filters = {}; }
     this.filterMenu = null;     // the filter whose values are open under the bar
+    this.people = null;         // everyone on the account (accountUsers): names and pictures
+    this.pictures = new Map();  // user id -> picture path (or null: initials)
 
     this.user = InputState.new({ placeholder: "account/username" });
     this.key = InputState.new({ placeholder: "API key" });
@@ -98,6 +101,7 @@ export default class Tickets extends View {
     cx.spawn(async (cx) => {
       try { this.creds = await loadCredentials(); } catch { this.creds = null; }
       if (!this.creds) this.view = "setup";
+      else this.loadPeople(cx);
       this.watch(cx);
       cx.notify();
     });
@@ -218,6 +222,7 @@ export default class Tickets extends View {
       }
       entry.at = Date.now();
       entry.loading = false;
+      this.wantShownPictures(cx);
       cx.notify();
     });
   }
@@ -273,8 +278,29 @@ export default class Tickets extends View {
       }
       entry.at = Date.now();
       entry.loading = false;
+      this.wantShownPictures(cx);
       cx.notify();
     });
+  }
+
+  /** Everyone on the account once, for their pictures. */
+  loadPeople(cx) {
+    if (this.people || this.peopleLoading || !this.creds) return;
+    this.peopleLoading = true;
+    cx.spawn(async (cx) => {
+      try { this.people = await accountUsers(this.creds); } catch { /* initials, then */ }
+      this.peopleLoading = false;
+      this.wantShownPictures(cx);
+      cx.notify();
+    });
+  }
+
+  /** Pictures for the people the list shows (assignees) and its menus offer. */
+  wantShownPictures(cx) {
+    const p = this.project();
+    const ids = (this.entryFor(p.permalink).tickets ?? []).map((k) => k.assigneeId);
+    for (const m of this.meta.values()) for (const u of m.users ?? []) ids.push(u.id);
+    wantPictures(this, ids, cx, downloadAvatars, appHome());
   }
 
   loadChoices(project, cx) {
@@ -286,6 +312,7 @@ export default class Tickets extends View {
       try { Object.assign(entry, await choices(this.creds, project)); }
       catch (e) { entry.error = errText(e); }
       entry.loading = false;
+      this.wantShownPictures(cx);
       cx.notify();
     });
   }
@@ -523,7 +550,7 @@ export default class Tickets extends View {
         if (kind === "priority") return svg("mods/tickets/icons/flag.svg").size(size).flex_none().text_color(colour(o.colour));
         if (kind === "type") return svg(typeIcon(o.icon)).size(size).flex_none().text_color(t.muted);
         if (kind === "category") return svg("mods/tickets/icons/tag.svg").size(size - 1).flex_none().text_color(t.dim);
-        return avatar(o.id == null ? null : o.name, size + 4);
+        return o.id == null ? avatar(null, size + 4) : personBadge(t, o.name, size + 4, this.pictures.get(o.id));
       };
       const chip = (k, kind) => {
         const f = FIELDS[kind];
