@@ -1,9 +1,9 @@
 // The whole ticket in a pane: its fields and every note, oldest first.
 //   Opened by the list (clicking a ticket's title) with
-//   pane.split {mod: "tickets", props: {view: "ticket", project, id}}.
-//   Which ticket it shows is shared("tickets.open"), so clicking another title in the list
+//   pane.split {mod: "codebasehq", props: {view: "ticket", project, id}}.
+//   Which ticket it shows is shared("codebasehq.open"), so clicking another title in the list
 //   shows that one here instead of opening a second pane. Opened with props.view "kanban", the
-//   copy is the board pane instead, following shared("tickets.board"); both can be open at once.
+//   copy is the board pane instead, following shared("codebasehq.board"); both can be open at once.
 //   "Post a response" at the bottom of a ticket posts a note (Markdown) and, as in Codebase, any
 //   details picked under it (status, priority, type, category, assignee, milestone); ⌘↩ posts too.
 import { div, svg, image } from "gpui-kit";
@@ -165,7 +165,7 @@ export class Viewer {
   /** What to show: a ticket ({project, id}) or a project's board ({view: "kanban", project}). */
   wanted() {
     const board = props()?.view === "kanban";
-    const s = shared(board ? "tickets.board" : "tickets.open");
+    const s = shared(board ? "codebasehq.board" : "codebasehq.open");
     if (board && s?.project) return { ...s, view: "kanban" };
     if (!board && s?.project && s?.id) return s;
     // Nothing shared (yet): what the pane was opened with.
@@ -519,10 +519,10 @@ export class Viewer {
       .child(h_flex().id(`img-${n.id}-${img.id}`).gap(6).items_center().text_size(12).cursor_pointer()
         .tooltip(d?.open ? "Hide the image" : "Show the image")
         .on_click((_e, cx) => this.toggleImage(img, cx))
-        .child(svg(`mods/tickets/icons/chevron-${d?.open ? "down" : "right"}.svg`).size(12).flex_none().text_color(t.dim))
-        .child(svg("mods/tickets/icons/image.svg").size(13).flex_none().text_color(t.muted))
+        .child(svg(`mods/codebasehq/icons/chevron-${d?.open ? "down" : "right"}.svg`).size(12).flex_none().text_color(t.dim))
+        .child(svg("mods/codebasehq/icons/image.svg").size(13).flex_none().text_color(t.muted))
         .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(img.name))
-        .when(Boolean(img.url), (el) => el.child(iconLink(t, `img-open-${n.id}-${img.id}`, "mods/tickets/external.svg",
+        .when(Boolean(img.url), (el) => el.child(iconLink(t, `img-open-${n.id}-${img.id}`, "mods/codebasehq/external.svg",
           (cx) => openLink(cx, img.url, base), null, "Open the image in the browser"))))
       .when(Boolean(d?.open), (el) => el.child(
         d.loading ? div().py(4).text_size(12).text_color(t.dim).child("Loading the image…")
@@ -614,7 +614,7 @@ export class Viewer {
   }
 
   base() {
-    return shared("tickets.base") ?? defaultBase(accountOf(this.creds));
+    return shared("codebasehq.base") ?? defaultBase(accountOf(this.creds));
   }
 
   userName(id, fallback) {
@@ -670,20 +670,20 @@ export class Viewer {
         // Opened from the board: back to it.
         .child(div().flex_1().min_w(0).text_size(11.5).text_color(t.dim).truncate()
           .child(`${this.ref.projectName ?? this.ref.project}${this.loading ? " · updating…" : ""}`))
-        .child(iconButton("view-copy", this.copied ? "mods/tickets/check.svg" : "mods/tickets/copy.svg", (cx) => {
+        .child(iconButton("view-copy", this.copied ? "mods/codebasehq/check.svg" : "mods/codebasehq/copy.svg", (cx) => {
           cx.write_to_clipboard(`#${k.id} ${k.summary}`);
           this.copied = true;
           cx.timer.after(1500, (cx) => { this.copied = false; cx.notify(); });
           cx.notify();
         }, this.copied ? t.ansi2 : null, this.copied ? "Copied" : `Copy "#${k.id} ${k.summary}"`))
-        .child(iconButton("view-open", "mods/tickets/external.svg", (cx) => openLink(cx, url), null, "Open in Codebase")))
+        .child(iconButton("view-open", "mods/codebasehq/external.svg", (cx) => openLink(cx, url), null, "Open in Codebase")))
       .child(h_flex().gap(10).items_start()
         .child(div().flex_none().text_size(17).font_semibold().text_color(t.muted).child(`#${k.id}`))
         .child(div().flex_1().min_w(0).text_size(17).font_semibold().child(k.summary)))
       .child(h_flex().id("details-toggle").ml(-6).px(6).h(24).gap(4).rounded(5).items_center()
         .text_size(12).text_color(t.muted).hover((s) => s.bg(t.hover).text_color(t.foreground))
         .on_click((_e, cx) => { this.details = !this.details; cx.notify(); })
-        .child(svg(`mods/tickets/icons/chevron-${this.details ? "down" : "right"}.svg`).size(13).flex_none())
+        .child(svg(`mods/codebasehq/icons/chevron-${this.details ? "down" : "right"}.svg`).size(13).flex_none())
         .child(div().child("Details")))
       .when(this.details, (el) => el.child(v_flex().gap(2)
         .children(["status", "priority", "type", "category", "assignee", "milestone"].map(detail))
@@ -710,12 +710,12 @@ export class Viewer {
             .tooltip(diff?.open ? "Hide the diff" : "Show the diff")
             .on_click((_e, cx) => this.toggleDiff(c, cx))
             .child(h_flex().gap(6).items_center().text_size(11.5)
-              .child(svg(`mods/tickets/icons/chevron-${diff?.open ? "down" : "right"}.svg`).size(12).flex_none().text_color(t.dim))
-              .child(svg("mods/tickets/icons/commit.svg").size(13).flex_none().text_color(t.muted))
+              .child(svg(`mods/codebasehq/icons/chevron-${diff?.open ? "down" : "right"}.svg`).size(12).flex_none().text_color(t.dim))
+              .child(svg("mods/codebasehq/icons/commit.svg").size(13).flex_none().text_color(t.muted))
               .child(div().flex_none().px(5).rounded(4).bg(t.surface).font_family(mono).text_size(11.5).text_color(t.accent).child(c.short))
-              .child(svg("mods/tickets/icons/branch.svg").size(12).flex_none().text_color(t.dim))
+              .child(svg("mods/codebasehq/icons/branch.svg").size(12).flex_none().text_color(t.dim))
               .child(div().flex_1().min_w(0).text_color(t.dim).truncate().child(c.branch))
-              .child(iconLink(t, `commit-open-${n.id}`, "mods/tickets/external.svg",
+              .child(iconLink(t, `commit-open-${n.id}`, "mods/codebasehq/external.svg",
                 (cx) => openLink(cx, commitUrl(base, this.ref.project, c.repo, c.ref)), null, "Open the commit in Codebase")))
             .child(div().text_size(13).font_semibold().text_color(t.foreground).child(title)))
           .when(Boolean(body), (el) => el.child(div().text_size(12).text_color(t.muted)

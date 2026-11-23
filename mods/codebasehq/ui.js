@@ -60,17 +60,17 @@ export function setField(k, kind, option) {
  */
 export function fieldMark(t, kind, o, size, person) {
   if (kind === "status") return div().size(7).rounded(4).flex_none().bg(colourOf(t, o?.colour));
-  if (kind === "priority") return svg("mods/tickets/icons/flag.svg").size(size).flex_none().text_color(colourOf(t, o?.colour));
+  if (kind === "priority") return svg("mods/codebasehq/icons/flag.svg").size(size).flex_none().text_color(colourOf(t, o?.colour));
   if (kind === "type") return svg(typeIcon(o?.icon)).size(size).flex_none().text_color(t.muted);
-  if (kind === "category") return svg("mods/tickets/icons/tag.svg").size(size - 1).flex_none().text_color(t.dim);
-  if (kind === "milestone") return svg("mods/tickets/icons/milestone.svg").size(size).flex_none().text_color(o?.id == null ? t.dim : t.muted);
-  if (o?.id == null) return svg("mods/tickets/user.svg").size(size).flex_none().text_color(t.dim);
+  if (kind === "category") return svg("mods/codebasehq/icons/tag.svg").size(size - 1).flex_none().text_color(t.dim);
+  if (kind === "milestone") return svg("mods/codebasehq/icons/milestone.svg").size(size).flex_none().text_color(o?.id == null ? t.dim : t.muted);
+  if (o?.id == null) return svg("mods/codebasehq/user.svg").size(size).flex_none().text_color(t.dim);
   return person(o, size + 5);
 }
 
 // Codebase's type icon names -> ours.
 const TYPE_ICONS = { bug: "bug", hat: "sparkles", construction: "hammer", task: "task", lifebuoy: "lifebuoy", broom: "broom", fire: "fire" };
-export const typeIcon = (name) => `mods/tickets/icons/${TYPE_ICONS[name] ?? "type"}.svg`;
+export const typeIcon = (name) => `mods/codebasehq/icons/${TYPE_ICONS[name] ?? "type"}.svg`;
 
 /** "Jane Ann Doe" -> "JD"; "janedoe" -> "JA" */
 export function initials(name) {
@@ -133,8 +133,8 @@ export function wantPictures(owner, ids, cx, download, home) {
 }
 
 // Every copy of the mod (the panel, the ticket pane) keeps its own tickets. After a change,
-// the one that made it says so in shared("tickets.changed"); the others reload.
-export const CHANGED = "tickets.changed";
+// the one that made it says so in shared("codebasehq.changed"); the others reload.
+export const CHANGED = "codebasehq.changed";
 let copies = 0;
 /** A token for this copy, so it can skip its own announcements. */
 export const copyId = () => `copy-${Date.now()}-${++copies}`;

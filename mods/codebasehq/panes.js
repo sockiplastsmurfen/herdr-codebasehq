@@ -1,19 +1,19 @@
 // The ticket pane and the board pane.
 //   Each is a copy of this mod in a pane of its own (viewer.js): the ticket pane shows
-//   shared("tickets.open"), the board pane shared("tickets.board"), so both can be open. Both
+//   shared("codebasehq.open"), the board pane shared("codebasehq.board"), so both can be open. Both
 //   the list (main.js) and the board (kanban.js) open and close them, through these.
-//   panes() names only the mod, so shared("tickets.panes") remembers which pane is which:
+//   panes() names only the mod, so shared("codebasehq.panes") remembers which pane is which:
 //   { [pane id]: "ticket" | "kanban" }, noted when the pane is opened.
 import { spaces, panes, run, shared, setShared } from "herdr";
 
-export const OPEN = "tickets.open", BOARD = "tickets.board", PANES = "tickets.panes";
+export const OPEN = "codebasehq.open", BOARD = "codebasehq.board", PANES = "codebasehq.panes";
 
 /** The ticket pane ("ticket") or board pane ("kanban") in the shown tab, if there is one. */
 export function viewerPane(kind) {
   const tab = spaces().find((s) => s.active)?.tabs?.find((x) => x.active)?.id;
   const known = shared(PANES) ?? {};
   // (A pane opened before panes were noted isn't either: the buttons open new ones.)
-  return panes().find((x) => x.mod === "tickets" && x.tab === tab && known[x.pane] === kind) ?? null;
+  return panes().find((x) => x.mod === "codebasehq" && x.tab === tab && known[x.pane] === kind) ?? null;
 }
 
 /**
@@ -25,12 +25,12 @@ export function openViewer(kind, ref, cx) {
   const tab = spaces().find((s) => s.active)?.tabs?.find((x) => x.active)?.id;
   const zoomed = panes().find((x) => x.tab === tab && x.zoomed);
   if (zoomed) run("pane.zoom", { pane: zoomed.pane });
-  const before = new Set(panes().filter((x) => x.mod === "tickets").map((x) => x.pane));
+  const before = new Set(panes().filter((x) => x.mod === "codebasehq").map((x) => x.pane));
   const { view: _v, ...rest } = ref;
-  run("pane.split", { direction: "right", mod: "tickets", props: { ...rest, view: kind } });
+  run("pane.split", { direction: "right", mod: "codebasehq", props: { ...rest, view: kind } });
   let tries = 0;
   const note = (cx) => {
-    const added = panes().find((x) => x.mod === "tickets" && !before.has(x.pane));
+    const added = panes().find((x) => x.mod === "codebasehq" && !before.has(x.pane));
     if (added) {
       const live = new Set(panes().map((x) => x.pane));
       const known = Object.fromEntries(Object.entries(shared(PANES) ?? {}).filter(([id]) => live.has(id)));

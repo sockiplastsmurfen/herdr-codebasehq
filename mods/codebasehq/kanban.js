@@ -1,5 +1,5 @@
 // A project's open tickets as a board: one column per open status, in the project's own order.
-//   Shown in the board pane (viewer.js, props.view "kanban"), for shared("tickets.board").
+//   Shown in the board pane (viewer.js, props.view "kanban"), for shared("codebasehq.board").
 //   Click a card's status, priority, type, category or assignee to pick another value, as in the
 //   list. Click a card's title to show the ticket in the ticket pane (again: close it), as in the
 //   list. Drag a card to another column to change its status (saved as a Codebase note with changes);
@@ -83,7 +83,7 @@ export function boardView(v, t, avatar) {
   const b = v.board, ref = v.ref;
   const note = (text, color) => div().p(16).text_size(12.5).text_color(color ?? t.dim).child(text);
   const head = h_flex().flex_none().h(44).px(18).gap(8).items_center().border_b(1).border_color(t.border)
-    .child(svg("mods/tickets/icons/kanban.svg").size(15).flex_none().text_color(t.muted))
+    .child(svg("mods/codebasehq/icons/kanban.svg").size(15).flex_none().text_color(t.muted))
     .child(div().flex_none().text_size(14).font_semibold().child("Kanban"))
     .child(div().flex_1().min_w(0).text_size(12).text_color(t.muted).truncate()
       .child(`${ref.projectName ?? ref.project}${b?.tickets ? ` · ${b.tickets.filter((k) => !k.closed).length} open` : ""}${v.loading ? " · updating…" : ""}`));

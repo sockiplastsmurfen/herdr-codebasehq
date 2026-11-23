@@ -91,7 +91,7 @@ export default class Tickets extends View {
 
     if (checking()) return;
     // The ticket view (another copy) makes its links with the same address.
-    if (this.baseUrl) setShared("tickets.base", this.baseUrl);
+    if (this.baseUrl) setShared("codebasehq.base", this.baseUrl);
     cx.spawn(async (cx) => {
       try { this.creds = await loadCredentials(); } catch { this.creds = null; }
       if (!this.creds) this.view = "setup";
@@ -477,7 +477,7 @@ export default class Tickets extends View {
       try {
         this.baseUrl = base;
         try { if (base) localStorage.setItem("baseUrl", base); else localStorage.removeItem("baseUrl"); } catch {}
-        setShared("tickets.base", base);
+        setShared("codebasehq.base", base);
         const changed = !this.creds || this.creds.user !== user || this.creds.key !== key;
         if (changed) {
           await saveCredentials(user, key);
@@ -516,7 +516,7 @@ export default class Tickets extends View {
     const path = (node, trail = []) => {
       if (!node) return null;
       const here = [...trail, node];
-      if (node.content?.mod === "tickets") return here;
+      if (node.content?.mod === "codebasehq") return here;
       for (const child of node.children ?? []) { const found = path(child, here); if (found) return found; }
       return null;
     };
@@ -593,14 +593,14 @@ export default class Tickets extends View {
     const subtitle = `${p.name}${count}`;
     const boardOpen = !p.all && Boolean(viewerPane("kanban")) && shared(BOARD)?.project === p.permalink;
     const header = this.header(t, "Tickets", subtitle, [
-      ...(p.all ? [] : [this.icon(t, "kanban", "mods/tickets/icons/kanban.svg", (cx) => { if (!boardOpen) this.hideList(); toggleKanban(p, cx); cx.notify(); },
+      ...(p.all ? [] : [this.icon(t, "kanban", "mods/codebasehq/icons/kanban.svg", (cx) => { if (!boardOpen) this.hideList(); toggleKanban(p, cx); cx.notify(); },
         boardOpen ? "Close the Kanban board" : `Kanban board of ${p.name}`, boardOpen)]),
-      this.icon(t, "project", "mods/tickets/icons/folder.svg", (cx) => this.openPicker(cx), `Project: ${p.name} (change)`),
-      this.icon(t, "new-ticket", "mods/tickets/icons/plus.svg", (cx) => this.openNew(cx),
+      this.icon(t, "project", "mods/codebasehq/icons/folder.svg", (cx) => this.openPicker(cx), `Project: ${p.name} (change)`),
+      this.icon(t, "new-ticket", "mods/codebasehq/icons/plus.svg", (cx) => this.openNew(cx),
         p.all ? "New ticket (pick its project)" : `New ticket in ${p.name}`),
-      this.icon(t, "refresh", "mods/tickets/icons/refresh.svg", (cx) => this.load(cx, true),
+      this.icon(t, "refresh", "mods/codebasehq/icons/refresh.svg", (cx) => this.load(cx, true),
         entry.loading ? "Loading…" : "Reload the tickets", false, entry.loading),
-      this.icon(t, "settings", "mods/tickets/settings.svg", (cx) => this.openSetup(cx), "Settings: Codebase API credentials and URL"),
+      this.icon(t, "settings", "mods/codebasehq/settings.svg", (cx) => this.openSetup(cx), "Settings: Codebase API credentials and URL"),
     ]);
 
     let content;
@@ -666,13 +666,13 @@ export default class Tickets extends View {
               .on_click((_e, cx) => { toggleTicket(k, cx); cx.notify(); })
               .child(k.summary))
             .child(h_flex().flex_none().gap(2).mt(-2).mr(-6)
-              .child(iconLink(t, `copy-${k.uid}`, this.copied === k.uid ? "mods/tickets/check.svg" : "mods/tickets/copy.svg", (cx) => {
+              .child(iconLink(t, `copy-${k.uid}`, this.copied === k.uid ? "mods/codebasehq/check.svg" : "mods/codebasehq/copy.svg", (cx) => {
                 cx.write_to_clipboard(`#${k.id} ${k.summary}`);
                 this.copied = k.uid;
                 cx.timer.after(1500, (cx) => { if (this.copied === k.uid) { this.copied = null; cx.notify(); } });
                 cx.notify();
               }, this.copied === k.uid ? t.ansi2 : null, this.copied === k.uid ? "Copied" : `Copy "#${k.id} ${k.summary}"`))
-              .child(iconLink(t, `open-${k.uid}`, "mods/tickets/external.svg", (cx) => openLink(cx, ticketUrl(base, k.project, k.id)), null, "Open in Codebase"))))
+              .child(iconLink(t, `open-${k.uid}`, "mods/codebasehq/external.svg", (cx) => openLink(cx, ticketUrl(base, k.project, k.id)), null, "Open in Codebase"))))
           .child(h_flex().gap(1).items_center().ml(-5)
             .child(chip(k, "status"))
             .child(chip(k, "priority"))
@@ -765,7 +765,7 @@ export default class Tickets extends View {
       return [{ id: null, name: "Unassigned" }, ...users.filter((u) => u.username === me), ...users.filter((u) => u.username !== me)];
     };
     const mark = (kind, o) => kind === "project"
-      ? svg("mods/tickets/ticket.svg").size(13).flex_none().text_color(t.muted)
+      ? svg("mods/codebasehq/ticket.svg").size(13).flex_none().text_color(t.muted)
       : fieldMark(t, kind, o, 13, this.person(t));
     const select = (kind, title) => {
       const value = kind === "project" ? (d.project ? { name: d.projectName ?? d.project } : null) : this.draftValue(kind);
@@ -780,7 +780,7 @@ export default class Tickets extends View {
           .child(mark(kind, value))
           .child(div().flex_1().min_w(0).truncate().text_color(value ? t.foreground : t.dim)
             .child(value?.name ?? (kind === "assignee" ? "Unassigned" : kind === "milestone" ? "None" : kind === "project" ? "Pick a project" : "—")))
-          .child(svg(`mods/tickets/icons/chevron-${open ? "down" : "right"}.svg`).size(12).flex_none().text_color(t.dim)))
+          .child(svg(`mods/codebasehq/icons/chevron-${open ? "down" : "right"}.svg`).size(12).flex_none().text_color(t.dim)))
         .when(open, (el) => el.child(v_flex().mt(4).p(4).gap(1).rounded(8).border(1).border_color(t.border).bg(t.raised)
           .when(kind === "project", (el) => el.child(div().p(2).child(Input.new(this.draftFilter).h(28).px(8).rounded(6).border(1)
             .border_color(t.input).bg(t.background).text_size(12).text_color(t.foreground))))

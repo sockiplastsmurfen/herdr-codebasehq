@@ -84,7 +84,7 @@ export function filterBar(t, o) {
           .child(div().size(14).flex_none().rounded(kind === "resolution" ? 7 : 3).border(1)
             .border_color(x.on ? t.accent : t.input).bg(x.on ? t.accent : t.background)
             .flex().items_center().justify_center()
-            .when(x.on, (el) => el.child(svg("mods/tickets/check.svg").size(10).text_color(t.accent_foreground))))
+            .when(x.on, (el) => el.child(svg("mods/codebasehq/check.svg").size(10).text_color(t.accent_foreground))))
           .when(Boolean(x.colour), (el) => el.child(div().size(7).rounded(4).flex_none().bg(colourOf(t, x.colour))))
           .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(x.name))
           .when(Boolean(x.closed), (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child("closed")))

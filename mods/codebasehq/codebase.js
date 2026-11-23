@@ -239,7 +239,7 @@ function pictureUrl(url) {
 }
 
 /**
- * Downloads people's pictures once into <appHome>/data/tickets-images/avatars/ (in one go).
+ * Downloads people's pictures once into <appHome>/data/codebasehq-images/avatars/ (in one go).
  * people: [{ id, url }]. Returns Map id -> path for image() (relative to appHome), or null
  * for no picture (none set, Codebase's silhouette, or it couldn't be fetched; remembered with a
  * ".none" file so it isn't asked again).
@@ -249,7 +249,7 @@ export async function downloadAvatars(appHome, people) {
   const list = people.filter((p) => Number.isInteger(p.id) && /^https:\/\//.test(p.url ?? ""))
     .map((p) => ({ ...p, url: pictureUrl(p.url) }));
   if (!list.length) return out;
-  const dir = `${appHome}/data/tickets-images/avatars`;
+  const dir = `${appHome}/data/codebasehq-images/avatars`;
   const script = [
     'dir="$1"; none="$2"; shift 2',
     'mkdir -p "$dir"',
@@ -270,7 +270,7 @@ export async function downloadAvatars(appHome, people) {
   const r = await exec("/bin/sh", ["-c", script, "sh", dir, NO_PICTURE, ...list.flatMap((p) => [String(p.id), p.url])], { timeout: 120000 });
   for (const line of (r.stdout ?? "").split("\n")) {
     const [id, file] = line.split("\t");
-    if (id) out.set(Number(id), file ? `data/tickets-images/avatars/${file}` : null);
+    if (id) out.set(Number(id), file ? `data/codebasehq-images/avatars/${file}` : null);
   }
   return out;
 }
@@ -408,13 +408,13 @@ export function uploadId(url) {
 }
 
 /**
- * Downloads an upload once into <appHome>/data/tickets-images/ and reads its size.
+ * Downloads an upload once into <appHome>/data/codebasehq-images/ and reads its size.
  * Returns { path (relative to appHome, for image()), width, height }.
  */
 export async function downloadUpload(creds, appHome, id, name) {
   if (!/^[0-9a-f-]{20,}$/i.test(id ?? "")) throw new Error("Not a Codebase upload.");
   const ext = (/\.(png|jpe?g|gif|webp|svg)$/i.exec(name ?? "")?.[1] ?? "png").toLowerCase();
-  const rel = `data/tickets-images/${id}.${ext}`;
+  const rel = `data/codebasehq-images/${id}.${ext}`;
   const file = `${appHome}/${rel}`;
   const r = await exec("/bin/sh", ["-c", [
     'set -e',
