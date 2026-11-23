@@ -99,6 +99,8 @@ export default class Tickets extends View {
     this.base = InputState.new({ placeholder: "https://example.codebasehq.com" });
     this.base.on("submit", (_e, cx) => this.save(cx));
     try { this.projectsDir = localStorage.getItem("projectsDir") || PROJECTS_DIR; } catch { this.projectsDir = PROJECTS_DIR; }
+    // The ticket pane looks for checkouts there too (Start work); it has a localStorage of its own.
+    if (!checking()) setShared("codebasehq.projectsDir", this.projectsDir);
     this.projectsDirInput = InputState.new({ placeholder: PROJECTS_DIR });
     this.projectsDirInput.on("submit", (_e, cx) => this.save(cx));
     // The New ticket form.
@@ -688,6 +690,7 @@ export default class Tickets extends View {
         try { if (base) localStorage.setItem("baseUrl", base); else localStorage.removeItem("baseUrl"); } catch {}
         setShared("codebasehq.base", base);
         this.projectsDir = projectsDir;
+        setShared("codebasehq.projectsDir", projectsDir);
         try { if (projectsDir !== PROJECTS_DIR) localStorage.setItem("projectsDir", projectsDir); else localStorage.removeItem("projectsDir"); } catch {}
         const changed = !this.creds || this.creds.user !== user || this.creds.key !== key;
         if (changed) {

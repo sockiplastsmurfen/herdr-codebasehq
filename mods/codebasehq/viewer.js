@@ -7,7 +7,7 @@
 //   "Post a response" (the header's speech-bubble icon) opens a form at the bottom that posts a note (Markdown) and, as in Codebase, any
 //   details picked under it (status, priority, type, category, assignee, milestone); ⌘↩ posts too.
 import { div, svg, image } from "gpui-kit";
-import { v_flex, h_flex, TextView, TextareaState, Textarea, ScrollHandle } from "gpui-base";
+import { v_flex, h_flex, TextView, TextareaState, Textarea, ScrollHandle, InputState } from "gpui-base";
 import { props, shared, checking, settings, spaces, appHome, openOverlay, notify } from "herdr";
 import {
   loadCredentials, accountOf, ticketDetail, ticketNotes, accountUsers, ticketUrl, defaultBase, ago,
@@ -20,6 +20,7 @@ import {
 import { fetchBoard, boardView } from "./kanban.js";
 import { NO_FILTER } from "./filters.js";
 import { OPEN, BOARD } from "./panes.js";
+import { toggleStartWork, startWorkView } from "./startwork.js";
 
 const CHECK = 300;        // look at what to show (no request unless it changed)
 const REFRESH = 60000;    // new notes
@@ -216,6 +217,8 @@ export class Viewer {
     this.response = TextareaState.new({ placeholder: "Write a response (Markdown)", rows: 4 });
     this.response.set_auto_grow(4, 14);
     this.response.on("submit", (e, cx) => { if (e?.secondary) this.postResponse(cx); });
+    this.start = null;          // the Start work form (startwork.js), for one ticket
+    this.branchInput = InputState.new({ placeholder: "Branch" });
     if (checking()) return;
     cx.spawn(async (cx) => {
       try { this.creds = await loadCredentials(); } catch { this.creds = null; }
@@ -750,6 +753,8 @@ export class Viewer {
           .child(div().flex_none().text_color(t.muted).child(`#${k.id}`))
           .child(div().flex_1().min_w(0).child(k.summary)))
         .child(h_flex().flex_none().gap(2).mr(-4)
+          .child(iconButton("view-start", "mods/codebasehq/icons/branch-plus.svg", (cx) => toggleStartWork(this, cx),
+            this.start?.key === this.key ? t.accent : null, "Start work: a branch for this ticket, In Progress", this.start?.key === this.key))
           .child(iconButton("view-copy", this.copied ? "mods/codebasehq/check.svg" : "mods/codebasehq/copy.svg", (cx) => {
             cx.write_to_clipboard(`#${k.id} ${k.summary}`);
             this.copied = true;
@@ -821,8 +826,10 @@ export class Viewer {
     };
 
     const notes = this.notes ?? [];
+    const startForm = startWorkView(this, t);
     return root
       .child(header)
+      .when(Boolean(startForm), (el) => el.child(startForm))
       .child(v_flex().id("ticket-notes").flex_1().min_h(0).overflow_y_scrollbar().track_scroll(this.notesScroll)
         .when(Boolean(this.error), (el) => el.child(note(this.error, t.ansi1)))
         .when(notes.length === 0, (el) => el.child(note("No notes.")))

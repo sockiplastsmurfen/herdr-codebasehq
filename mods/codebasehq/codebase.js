@@ -365,12 +365,17 @@ function remoteKey(url) {
  */
 export async function findClone(cloneUrl, folders) {
   const key = remoteKey(cloneUrl);
-  return key ? findCheckout(folders, (url) => remoteKey(url) === key) : null;
+  return key ? (await findCheckouts(folders, (url) => remoteKey(url) === key, true))[0] ?? null : null;
 }
 
 /** A local checkout of any of a project's repositories, looked for as findClone does. */
 export async function findProjectCheckout(project, folders) {
-  return findCheckout(folders, (url) => parseRemote(url)?.project === project);
+  return (await findCheckouts(folders, (url) => parseRemote(url)?.project === project, true))[0] ?? null;
+}
+
+/** Every checkout of the project's repositories in the folders or next to them. */
+export function findProjectCheckouts(project, folders) {
+  return findCheckouts(folders, (url) => parseRemote(url)?.project === project, false);
 }
 
 /**
@@ -439,9 +444,10 @@ function cloneProgress(text) {
   return { step: "Connecting", percent: 0, overall: 0, detail: null };
 }
 
-/** The first checkout in the folders, or next to them, whose origin url passes `wanted`. */
-async function findCheckout(folders, wanted) {
+/** The checkouts in the folders, or next to them, whose origin url passes `wanted` (only the first, if first). */
+async function findCheckouts(folders, wanted, first) {
   const parents = [...new Set(folders.filter(Boolean).flatMap((f) => [f, f.replace(/\/[^/]+\/?$/, "")]))];
+  const found = [];
   for (const dir of parents) {
     // Every checkout in dir and dir itself: "<folder>\t<origin url>" per line.
     const r = await exec("/bin/sh", ["-c",
@@ -449,10 +455,52 @@ async function findCheckout(folders, wanted) {
       "sh", dir], { timeout: 15000 }).catch(() => null);
     for (const line of (r?.stdout ?? "").split("\n")) {
       const [folder, url] = line.split("\t");
-      if (folder && wanted(url)) return folder;
+      if (folder && wanted(url) && !found.includes(folder)) { found.push(folder); if (first) return found; }
     }
   }
-  return null;
+  return found;
+}
+
+// --- starting work ---------------------------------------------------------------
+
+/**
+ * A ticket's branch name, as the team names them: its number and its summary in a few words,
+ * "583", "Drupal 11 i november/december" -> "583-drupal-11-i-november-december" (60 at most).
+ */
+export function branchName(id, summary) {
+  const words = (summary ?? "").normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ").trim().split(" ").filter(Boolean);
+  let name = String(id);
+  for (const w of words) { if (`${name}-${w}`.length > 60) break; name += `-${w}`; }
+  return name;
+}
+
+/** Whether a branch name is one git takes, and can't be read as an option. */
+export const validBranch = (name) => /^[A-Za-z0-9][\w./-]*$/.test(name ?? "") && !/\.\.|\/\/|\/$|\.lock$|\.$/.test(name);
+
+/**
+ * Switches a checkout to a branch: the local one if it is there, else origin's, else a new one
+ * from origin's default branch (fetched first; the checked-out branch when origin names none).
+ * Changes in the working tree come along, as with git switch. Never asks: ssh in batch mode.
+ * Returns { how: "existing" | "remote" | "new", base }.
+ */
+export async function startBranch(folder, name) {
+  if (!validBranch(name)) throw new Error(`Not a branch name: ${name}`);
+  const r = await exec("/bin/sh", ["-c", [
+    'set -e',
+    'cd "$1"',
+    'export GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="ssh -o BatchMode=yes"',
+    'git check-ref-format --branch "$2" >/dev/null',
+    'git fetch --quiet origin 2>/dev/null || true',
+    'if git show-ref --verify --quiet "refs/heads/$2"; then git switch --quiet "$2"; echo existing',
+    'elif git show-ref --verify --quiet "refs/remotes/origin/$2"; then git switch --quiet --track "origin/$2"; echo remote',
+    'else base=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || git rev-parse --abbrev-ref HEAD)',
+    '  git switch --quiet --no-track -c "$2" "$base"; echo "new $base"',
+    'fi',
+  ].join("\n"), "sh", folder, name], { timeout: 120000 });
+  if (r.code !== 0) throw new Error((r.stderr || "").trim().split("\n").filter(Boolean).pop() || "git could not switch to the branch.");
+  const [how, base] = r.stdout.trim().split(" ");
+  return { how, base: base ?? null };
 }
 
 /**
