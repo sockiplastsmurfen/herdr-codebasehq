@@ -15,6 +15,7 @@ import { toggleTicket, shownTicket } from "./panes.js";
 const PAGES = 25;        // at most 500 open tickets
 const RECENT_CLOSED = 1; // pages (20) of the most recently updated closed tickets for the closed columns
 const COLUMN = 264;      // px
+const SHOWN = 30;        // cards a column draws at first; "Show more" draws 30 more
 const THRESHOLD = 5;     // px the pointer moves before a press becomes a drag
 
 /** Changes one field of a card (a column is a status): on the board at once, then in Codebase; back if that fails. */
@@ -168,6 +169,9 @@ export function boardView(v, t, avatar) {
       v.drag = { k, from: c.id, start: e.position, offset: e.local_position ?? { x: 20, y: 16 }, at: null, active: false, over: c.id };
     });
   const target = drag?.active && drag.over != null && drag.over !== drag.from ? drag.over : undefined;
+  // A big column draws SHOWN cards at a time: the board is drawn on every pointer move while
+  // dragging. Kept on the viewer per project and column, so a reload doesn't fold it back.
+  const shown = (c) => v.boardShown?.[`${ref.project}/${c.id}`] ?? SHOWN;
   const column = (c) => v_flex().id(`col-${c.id}`).w(COLUMN).flex_none().h_full().min_h(0).rounded(10)
     .border(1).border_color(target === c.id ? t.accent : t.background).bg(target === c.id ? t.selected : t.background)
     .on_mouse_move(() => { if (v.drag && v.drag.over !== c.id) v.drag.over = c.id; })
@@ -187,7 +191,13 @@ export function boardView(v, t, avatar) {
       // Where the card lands when it is let go here.
       .when(target === c.id, (el) => el.child(div().flex_none().h(56).rounded(8).border(1).border_color(t.accent).bg(t.selected)
         .flex().items_center().justify_center().text_size(12).text_color(t.muted).child(`Move to ${c.name}`)))
-      .children(c.tickets.map((k) => card(k, c))));
+      .children(c.tickets.slice(0, shown(c)).map((k) => card(k, c)))
+      .when(c.tickets.length > shown(c), (el) => el.child(div().id(`col-more-${c.id}`).flex_none().h(28).rounded(6)
+        .flex().items_center().justify_center().text_size(12).text_color(t.muted).cursor_pointer()
+        .border(1).border_color(t.border).hover((s) => s.bg(t.hover).text_color(t.foreground))
+        .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+        .on_click((_e, cx) => { (v.boardShown ??= {})[`${ref.project}/${c.id}`] = shown(c) + SHOWN; cx.notify(); })
+        .child(`Show ${Math.min(SHOWN, c.tickets.length - shown(c))} more (${c.tickets.length - shown(c)} not shown)`))));
 
   // The pointer is tracked over the whole board; the dragged card follows it.
   return root.id("kanban")

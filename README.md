@@ -78,7 +78,7 @@ A [Herdr](https://herdr.dev) mod for [Codebase HQ](https://www.codebasehq.com) t
   pick the project first. The new ticket opens in the ticket pane.
 - **Kanban** (the board icon, in a project) shows the project's tickets as a board in a pane
   zoomed to the whole work area: a column per status in the project's order, the closed ones
-  last with only the 20 most recently updated. It has the list's filters (nothing picked by
+  last with only the 20 most recently updated. A column draws 30 cards; **Show more** draws 30 more. It has the list's filters (nothing picked by
   default). Drag a card to another column to change its status; it moves back if Codebase
   refuses. Click a card's title to open the ticket pane, its details to change them.
 - **Notifications**: when someone else writes on a ticket assigned to you, a notification says

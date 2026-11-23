@@ -40,3 +40,15 @@ v.setBoardFilter("example-shop", { ...v.boardFilter("example-shop"), assignee: [
 await settle(6);
 check("the Unassigned filter leaves the unassigned", v.board.tickets.length > 0 && v.board.tickets.every((k) => k.assigneeId == null), v.board.tickets.map((k) => k.id));
 check("a filter click keeps the project's values (no new requests)", v.board.meta === meta);
+
+// A big column draws 30 cards, with Show more.
+const newId = v.board.statuses.find((s) => s.name === "New").id;
+const many = Array.from({ length: 45 }, (_, i) => ({ ...v.board.tickets[0], id: 1000 + i, statusId: newId, status: "New", closed: false, updated: Date.now() - i * 1000 }));
+v.board = { ...v.board, tickets: [...v.board.tickets, ...many], columns: null };
+tree = v.render(t);
+check("a column of 45+ draws 30 cards and offers the rest", Boolean(find(tree, "card-1029")) && !find(tree, "card-1030") && /Show 16 more \(16 not shown\)/.test(text(tree)), text(find(tree, `col-more-${newId}`)));
+click(tree, `col-more-${newId}`, cx);
+tree = v.render(t);
+check("Show more draws the next ones", Boolean(find(tree, "card-1044")));
+v.board = { ...v.board, columns: null };
+check("… and a reload of the board keeps them shown", Boolean(find(v.render(t), "card-1044")));

@@ -33,6 +33,7 @@ Your Codebase HQ tickets in Herdr. A panel beside Files and Changes lists the ti
   - A 44px header with a board icon, "Kanban", and "Example Shop · 11 open".
   - The same filter bar, with nothing picked by default.
   - One column per status, 264px wide with radius 10, in the project's order with the closed statuses last. Each column header has a dot, the name and a count ("3 recent" for closed ones).
+  - A column draws 30 cards, then a "Show N more (M not shown)" button (28px) that draws 30 more; how many are shown is kept per project and column, so the minute's reload doesn't fold it back.
   - Cards with radius 8 and padding 10: `#id` and the summary (12.5px), then status, priority, type, category (grows), age and assignee.
 - **The attachment dialog** (a Herdr dialog, 80% × 90% of the window; Esc or a click beside it closes it): a 44px header with a paperclip, the file's name (13px semibold), "N pages" or "first page" (dim), and 22px icons: Download, Quick Look (eye), Open in the browser, Close (×). Under it, on `background`, the pages as pictures, centered, 12px apart, at most the dialog's width (a small picture keeps its size), white behind document pages. A text file shows as text in the mono font (5000 lines). "Opening <name>…" while it is prepared.
 - **Settings** (in the panel): API username (`account/username`), API key (masked), Codebase URL for links and Default project folder (`~/Sites` when empty), with Save and Forget credentials.
