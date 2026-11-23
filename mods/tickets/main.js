@@ -11,15 +11,17 @@
 // https://<account>.codebasehq.com, or your own domain) is kept in this mod's localStorage.
 // Neither is ever written to the mod's folder.
 import { View, div, svg } from "gpui-kit";
-import { v_flex, h_flex, InputState, Input } from "gpui-base";
-import { exec, focused, spaces, panes, theme, checking, props, notify, run, shared, setShared, appHome } from "herdr";
+import { v_flex, h_flex, InputState, Input, TextareaState, Textarea } from "gpui-base";
+import { exec, focused, spaces, panes, theme, checking, props, notify, run, shared, setShared, appHome, layout } from "herdr";
 import {
   loadCredentials, saveCredentials, forgetCredentials, accountOf,
   ticketPage, projects, repoOf, ticketUrl, ticketsUrl, ago, ApiError, defaultBase, normalizeBase, choices, updateTicket,
-  accountUsers, downloadAvatars,
+  accountUsers, downloadAvatars, createTicket,
 } from "./codebase.js";
-import { TITLES, typeIcon, initials, colourOf, personColour, personBadge, wantPictures } from "./ui.js";
+import { TITLES, FIELDS, typeIcon, initials, colourOf, personColour, personBadge, wantPictures, CHANGED, copyId, announceChange } from "./ui.js";
 import { Viewer } from "./viewer.js";
+import { filterBar, searchOf } from "./filters.js";
+import { viewerPane, toggleTicket, toggleKanban, showTicket, shownTicket, BOARD } from "./panes.js";
 
 const WATCH = 1500;       // how often to look at which folder is focused (no exec unless it changed)
 const REFRESH = 120000;   // tickets
@@ -37,36 +39,18 @@ const tag = (k, project, projectName) => ({ ...k, project, projectName: projectN
 // The list's filter, per project. Values are what Codebase's search takes: names, and usernames
 // (or "me") for the assignee. resolution: "open" | "closed" | "all".
 const DEFAULT_FILTER = { assignee: ["me"], status: [], priority: [], category: [], type: [], resolution: "open" };
-const FILTER_KINDS = ["assignee", "status", "priority", "category", "type"];
-
-const quote = (v) => (/[\s,:"]/.test(v) ? `"${v.replace(/"/g, "")}"` : v);
-
-/** { assignee: ["me"], resolution: "open" } -> 'assignee:me resolution:open' */
-function searchOf(f) {
-  const parts = FILTER_KINDS.filter((k) => f[k]?.length).map((k) => `${k}:${f[k].map(quote).join(",")}`);
-  if (f.resolution !== "all") parts.push(`resolution:${f.resolution}`);
-  return parts.join(" ");
-}
-
-// The fields a card shows and lets you change: where the choices are, what the API calls
-// the change, and the ticket's own keys for the id, the name and a colour.
-const FIELDS = {
-  status:   { list: "statuses",   change: "status_id",   id: "statusId",   name: "status",   colour: "statusColour" },
-  priority: { list: "priorities", change: "priority_id", id: "priorityId", name: "priority", colour: "priorityColour" },
-  type:     { list: "types",      change: "type_id",     id: "typeId",     name: "type",     icon: "typeIcon" },
-  category: { list: "categories", change: "category_id", id: "categoryId", name: "category" },
-  assignee: { list: "users",      change: "assignee_id", id: "assigneeId", name: "assignee" },
-};
 
 export default class Tickets extends View {
   init(_props, cx) {
-    // A copy opened as a pane to show one ticket (see viewer.js).
-    if (props()?.view === "ticket") {
+    // A copy opened as a pane to show a ticket or a project's board (see viewer.js).
+    if (props()?.view === "ticket" || props()?.view === "kanban") {
       this.viewer = new Viewer();
       this.viewer.init(cx);
       return;
     }
     this.creds = undefined;     // undefined: not read yet; null: none saved
+    this.me = copyId();         // to know our own change announcements
+    this.seenChange = shared(CHANGED)?.at ?? 0;
     this.view = "list";         // "list" | "picker" | "setup"
     this.cwd = undefined;
     this.repo = null;           // { root, remote: {account, project} | null }
@@ -89,6 +73,13 @@ export default class Tickets extends View {
     try { this.baseUrl = localStorage.getItem("baseUrl") || null; } catch { this.baseUrl = null; }
     this.base = InputState.new({ placeholder: "https://example.codebasehq.com" });
     this.base.on("submit", (_e, cx) => this.save(cx));
+    // The New ticket form.
+    this.draft = null;          // { project, projectName, status, priority, type, category, assignee, menu, saving, error }
+    this.summary = InputState.new({ placeholder: "Subject" });
+    this.description = TextareaState.new({ placeholder: "Description (Markdown)", rows: 6 });
+    this.description.set_auto_grow(6, 16);
+    this.draftFilter = InputState.new({ placeholder: "Filter projects" });
+    this.draftFilter.on("change", (_e, cx) => cx.notify());
     this.filter = InputState.new({ placeholder: "Filter projects" });
     this.filter.on("change", (_e, cx) => cx.notify());
     this.key.on("submit", (_e, cx) => this.save(cx));
@@ -105,7 +96,7 @@ export default class Tickets extends View {
       this.watch(cx);
       cx.notify();
     });
-    cx.timer.every(WATCH, (cx) => this.watch(cx));
+    cx.timer.every(WATCH, (cx) => { this.watch(cx); this.followChanges(cx); });
     cx.timer.every(REFRESH, (cx) => this.load(cx, "timer"));
   }
 
@@ -303,6 +294,19 @@ export default class Tickets extends View {
     wantPictures(this, ids, cx, downloadAvatars, appHome());
   }
 
+  /**
+   * A ticket changed somewhere else (the board, the ticket pane): every list is out of date,
+   * the shown one reloads now.
+   */
+  followChanges(cx) {
+    const c = shared(CHANGED);
+    if (!c?.at || c.at <= this.seenChange) return;
+    this.seenChange = c.at;
+    if (c.from === this.me) return;
+    for (const entry of this.cache.values()) entry.at = 0;
+    this.load(cx, true);
+  }
+
   loadChoices(project, cx) {
     const m = this.meta.get(project);
     if (m && (m.loading || m.statuses)) return;
@@ -333,11 +337,14 @@ export default class Tickets extends View {
     k[f.id] = option.id;
     k[f.name] = option.id === null ? null : kind === "assignee" ? option.username : option.name;
     if (f.colour) k[f.colour] = option.colour;
+    // The type shows as its icon only: without this the card would look unchanged.
+    if (f.icon) k[f.icon] = option.icon ?? null;
     this.updating.add(k.uid);
     cx.notify();
     cx.spawn(async (cx) => {
       try {
         await updateTicket(this.creds, project, k.id, { [f.change]: option.id ?? "" });
+        announceChange(setShared, this.me, project, k.id);
         k.updated = Date.now();
         if (kind === "status") k.closed = Boolean(option.closed);
         const shown = this.project().permalink;
@@ -351,6 +358,77 @@ export default class Tickets extends View {
         notify({ title: `Could not change #${k.id}`, body: errText(e), level: "error", timeout: 10000 });
       }
       this.updating.delete(k.uid);
+      cx.notify();
+    });
+  }
+
+  // --- new ticket ------------------------------------------------------------------
+
+  /** Opens the New ticket form: for the shown project, or with a project to pick (All projects). */
+  openNew(cx) {
+    const p = this.project();
+    this.draft = { project: p.all ? null : p.permalink, projectName: p.all ? null : p.name, menu: p.all ? "project" : null, saving: false, error: null };
+    this.summary.set_value("");
+    this.description.set_value("");
+    this.draftFilter.set_value("");
+    this.view = "new";
+    if (this.draft.project) { this.loadChoices(this.draft.project, cx); this.summary.focus(); }
+    else this.ensureProjects(cx);
+    cx.notify();
+  }
+
+  ensureProjects(cx) {
+    if (this.projectList || this.projectsLoading) return;
+    this.projectsLoading = true;
+    cx.spawn(async (cx) => {
+      try { this.projectList = await projects(this.creds); this.projectError = null; }
+      catch (e) { this.projectError = errText(e); }
+      this.projectsLoading = false;
+      cx.notify();
+    });
+  }
+
+  /** The draft's value for a field: picked, else the project's default (first open status, default priority). */
+  draftValue(kind) {
+    const d = this.draft, meta = d?.project ? this.meta.get(d.project) : null;
+    if (d && d[kind] !== undefined) return d[kind];
+    if (!meta?.statuses) return null;
+    if (kind === "status") return meta.statuses.find((x) => !x.closed) ?? null;
+    if (kind === "priority") return meta.priorities.find((x) => x.isDefault) ?? meta.priorities[0] ?? null;
+    if (kind === "type") return meta.types[0] ?? null;
+    if (kind === "category") return meta.categories[0] ?? null;
+    return null; // assignee: nobody unless picked
+  }
+
+  submitNew(cx) {
+    const d = this.draft;
+    const summary = this.summary.value().trim();
+    if (!d.project) { d.error = "Pick the ticket's project."; cx.notify(); return; }
+    if (!summary) { d.error = "Write a subject."; this.summary.focus(); cx.notify(); return; }
+    if (d.saving) return;
+    d.saving = true; d.error = null;
+    cx.notify();
+    const id = (kind) => this.draftValue(kind)?.id ?? undefined;
+    cx.spawn(async (cx) => {
+      try {
+        const k = await createTicket(this.creds, d.project, {
+          summary, description: this.description.value().trim() || undefined,
+          status_id: id("status"), priority_id: id("priority"), ticket_type_id: id("type"),
+          category_id: id("category"), assignee_id: id("assignee"),
+        });
+        notify({ title: `#${k.id} created`, body: summary, level: "success", timeout: 5000 });
+        announceChange(setShared, this.me, d.project, k.id);
+        this.draft = null;
+        this.view = "list";
+        // The lists that may show it are out of date now.
+        for (const [key, entry] of this.cache) if (key.startsWith(`${d.project}\n`) || key.startsWith(`${ALL}\n`)) entry.at = 0;
+        this.load(cx, true);
+        // Show it in the ticket pane (opening one if there is none; never closing it).
+        showTicket({ project: d.project, id: k.id, uid: `${d.project}-${k.id}`, projectName: d.projectName ?? d.project }, cx);
+      } catch (e) {
+        d.saving = false;
+        d.error = errText(e);
+      }
       cx.notify();
     });
   }
@@ -435,24 +513,24 @@ export default class Tickets extends View {
     });
   }
 
-  /** The ticket view pane in the shown tab, if there is one. */
-  viewerPane() {
-    const tab = spaces().find((s) => s.active)?.tabs?.find((x) => x.active)?.id;
-    return panes().find((x) => x.mod === "tickets" && x.tab === tab) ?? null;
-  }
-
-  /** Shows a ticket in the view pane (opening it beside), or closes the pane if it shows this one. */
-  toggleTicket(k) {
-    const pane = this.viewerPane();
-    const open = shared("tickets.open");
-    if (pane && open?.uid === k.uid) {
-      setShared("tickets.open", null);
-      run("pane.close", { pane: pane.pane });
-      return;
-    }
-    const ref = { project: k.project, id: k.id, uid: k.uid, projectName: k.projectName };
-    setShared("tickets.open", ref);
-    if (!pane) run("pane.split", { direction: "right", mod: "tickets", props: { view: "ticket", ...ref } });
+  /**
+   * Puts the list away (opening the board): hides the side panel this block is in (the layout's
+   * "panel"), else this block. The Tickets button in the tab bar shows it again.
+   */
+  hideList() {
+    const path = (node, trail = []) => {
+      if (!node) return null;
+      const here = [...trail, node];
+      if (node.content?.mod === "tickets") return here;
+      for (const child of node.children ?? []) { const found = path(child, here); if (found) return found; }
+      return null;
+    };
+    const byId = (node, id) => node?.id === id ? node : (node?.children ?? []).map((c) => byId(c, id)).find(Boolean) ?? null;
+    const root = layout();
+    const found = path(root);
+    // Without the blocks' content in layout(), the layout's side panel by its id.
+    const panel = found ? found.find((n) => n.id === "panel") ?? found[found.length - 1] : byId(root, "panel");
+    if (panel?.id && !panel.hidden) run("layout.hide", { id: panel.id });
   }
 
   openUrl(url) {
@@ -469,6 +547,7 @@ export default class Tickets extends View {
       this.creds === undefined ? this.note(t, "Loading…")
       : this.view === "setup" ? this.renderSetup(t)
       : this.view === "picker" ? this.renderPicker(t)
+      : this.view === "new" ? this.renderNew(t)
       : this.renderList(t);
     return root.bg(t.surface).text_color(t.foreground).child(body);
   }
@@ -490,17 +569,22 @@ export default class Tickets extends View {
       .on_click((e, cx) => { cx.stop_propagation(); onClick(cx); }).child(label);
   }
 
-  icon(t, id, path, onClick) {
+  /** A framed icon button (the header's). Every icon button says what it does in a tooltip. */
+  icon(t, id, path, onClick, tip, active = false, spin = false) {
     return div().id(id).flex_none().size(24).rounded(6).flex().items_center().justify_center()
-      .border(1).border_color(t.border).bg(t.surface).text_color(t.muted)
+      .border(1).border_color(active ? t.accent : t.border).bg(active ? t.selected : t.surface)
+      .text_color(active ? t.foreground : t.muted)
       .hover((s) => s.bg(t.hover).text_color(t.foreground))
-      .on_click((_e, cx) => onClick(cx)).child(svg(path).size(13));
+      .tooltip(tip)
+      .on_click((_e, cx) => onClick(cx))
+      .child(spin ? svg(path).size(13).spin(900) : svg(path).size(13));
   }
 
-  /** A bare icon button (Copy ref, Open on a card). */
-  iconLink(t, id, path, onClick, color) {
+  /** A bare icon button (Copy, Open on a card), with its tooltip. */
+  iconLink(t, id, path, onClick, color, tip) {
     return div().id(id).flex_none().size(22).rounded(5).flex().items_center().justify_center()
       .text_color(color ?? t.dim).hover((s) => s.bg(t.hover).text_color(color ?? t.foreground))
+      .when(Boolean(tip), (el) => el.tooltip(tip))
       .on_click((_e, cx) => { cx.stop_propagation(); onClick(cx); }).child(svg(path).size(13));
   }
 
@@ -518,10 +602,16 @@ export default class Tickets extends View {
     const resolution = p ? this.filterFor(p.permalink).resolution : "open";
     const count = tickets ? ` · ${tickets.length}${entry.more ? "+" : ""}${resolution === "all" ? "" : ` ${resolution}`}` : "";
     const subtitle = p ? `${p.name}${count}` : "";
+    const boardOpen = !p.all && Boolean(viewerPane("kanban")) && shared(BOARD)?.project === p.permalink;
     const header = this.header(t, "Tickets", subtitle, [
-      this.button(t, "project", "Project", (cx) => this.openPicker(cx)),
-      this.button(t, "refresh", entry?.loading ? "…" : "↻", (cx) => this.load(cx, true)),
-      this.icon(t, "settings", "mods/tickets/settings.svg", (cx) => this.openSetup(cx)),
+      ...(p.all ? [] : [this.icon(t, "kanban", "mods/tickets/icons/kanban.svg", (cx) => { if (!boardOpen) this.hideList(); toggleKanban(p, cx); cx.notify(); },
+        boardOpen ? "Close the Kanban board" : `Kanban board of ${p.name}`, boardOpen)]),
+      this.icon(t, "project", "mods/tickets/icons/folder.svg", (cx) => this.openPicker(cx), `Project: ${p.name} (change)`),
+      this.icon(t, "new-ticket", "mods/tickets/icons/plus.svg", (cx) => this.openNew(cx),
+        p.all ? "New ticket (pick its project)" : `New ticket in ${p.name}`),
+      this.icon(t, "refresh", "mods/tickets/icons/refresh.svg", (cx) => this.load(cx, true),
+        entry?.loading ? "Loading…" : "Reload the tickets", false, Boolean(entry?.loading)),
+      this.icon(t, "settings", "mods/tickets/settings.svg", (cx) => this.openSetup(cx), "Settings: Codebase API credentials and URL"),
     ]);
 
     let content;
@@ -584,7 +674,7 @@ export default class Tickets extends View {
             .child(div().flex_1().min_w(0).truncate().text_color(o.closed || o.id === null ? t.muted : t.foreground).child(o.name))
             .when(Boolean(o.closed), (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child("closes")))));
       };
-      const viewing = this.viewerPane() ? shared("tickets.open")?.uid : null;
+      const viewing = shownTicket();
       const card = (k, _i, _all, shown = viewing === k.uid) =>
         v_flex().id(`ticket-${k.uid}`).flex_none().mx(10).mb(8).px(12).pt(10).pb(8).gap(6)
           .rounded(8).border(1).border_color(shown ? t.accent : this.menu?.id === k.uid ? t.input : t.border).bg(t.raised)
@@ -595,7 +685,7 @@ export default class Tickets extends View {
             .child(div().id(`title-${k.uid}`).flex_1().min_w(0).text_size(13).rounded(4)
               .text_color(shown ? t.accent : t.foreground).hover((s) => s.text_color(t.accent))
               .tooltip(shown ? "Close the ticket view" : "Show the whole ticket")
-              .on_click((_e, cx) => { this.toggleTicket(k); cx.notify(); })
+              .on_click((_e, cx) => { toggleTicket(k, cx); cx.notify(); })
               .child(k.summary))
             .child(h_flex().flex_none().gap(2).mt(-2).mr(-6)
               .child(this.iconLink(t, `copy-${k.uid}`, this.copied === k.uid ? "mods/tickets/check.svg" : "mods/tickets/copy.svg", (cx) => {
@@ -603,8 +693,8 @@ export default class Tickets extends View {
                 this.copied = k.uid;
                 cx.timer.after(1500, (cx) => { if (this.copied === k.uid) { this.copied = null; cx.notify(); } });
                 cx.notify();
-              }, this.copied === k.uid ? t.ansi2 : null))
-              .child(this.iconLink(t, `open-${k.uid}`, "mods/tickets/external.svg", () => this.openUrl(ticketUrl(base, k.project, k.id))))))
+              }, this.copied === k.uid ? t.ansi2 : null, this.copied === k.uid ? "Copied" : `Copy "#${k.id} ${k.summary}"`))
+              .child(this.iconLink(t, `open-${k.uid}`, "mods/tickets/external.svg", () => this.openUrl(ticketUrl(base, k.project, k.id)), null, "Open in Codebase"))))
           .child(h_flex().gap(1).items_center().ml(-5)
             .child(chip(k, "status"))
             .child(chip(k, "priority"))
@@ -658,73 +748,105 @@ export default class Tickets extends View {
   }
 
 
-  /** The filter bar: one button per field, its values (several can be picked) open below it. */
+  /** The filter bar (filters.js), with this project's filter and values. */
   renderFilters(t, project) {
-    const f = this.filterFor(project);
-    const meta = project === ALL ? this.mergedChoices() : this.meta.get(project);
+    return filterBar(t, {
+      id: "filter",
+      filter: this.filterFor(project),
+      defaults: DEFAULT_FILTER,
+      meta: project === ALL ? this.mergedChoices() : this.meta.get(project),
+      me: this.creds?.user?.split("/")[1],
+      open: this.filterMenu,
+      setOpen: (kind, cx) => { this.filterMenu = kind; cx.notify(); },
+      set: (f, cx) => this.setFilter(project, f, cx),
+      loadMeta: (cx) => { if (project !== ALL) this.loadChoices(project, cx); },
+    });
+  }
+
+  renderNew(t) {
+    const d = this.draft;
+    const meta = d.project ? this.meta.get(d.project) : null;
+    const label = (text) => div().pt(12).pb(5).text_size(11.5).text_color(t.dim).child(text);
     const me = this.creds?.user?.split("/")[1];
-    const userName = (u) => u === "me" ? "Me" : meta?.users?.find((x) => x.username === u)?.name ?? u;
-    const summary = (kind) => {
-      if (kind === "resolution") return { open: "Open", closed: "Closed", all: "Open and closed" }[f.resolution];
-      const v = f[kind];
-      if (!v.length) return null;
-      const first = kind === "assignee" ? userName(v[0]) : v[0];
-      return v.length > 1 ? `${first} +${v.length - 1}` : first;
-    };
-    const kinds = ["resolution", ...FILTER_KINDS];
-    const button = (kind) => {
-      const value = summary(kind), open = this.filterMenu === kind;
-      const active = kind === "resolution" ? f.resolution !== "all" : Boolean(value);
-      return h_flex().id(`filter-${kind}`).flex_none().h(22).px(7).gap(4).rounded(11).items_center().text_size(11.5)
-        .border(1).border_color(active ? t.input : t.border).bg(open ? t.selected : active ? t.raised : t.surface)
-        .text_color(active ? t.foreground : t.dim).hover((s) => s.bg(t.hover))
-        .on_click((_e, cx) => { this.filterMenu = open ? null : kind; if (project !== ALL) this.loadChoices(project, cx); cx.notify(); })
-        .child(kind === "resolution" ? value : value ? `${TITLES[kind].replace("Assigned to", "Assignee")}: ${value}` : TITLES[kind].replace("Assigned to", "Assignee"));
-    };
-    const isDefault = JSON.stringify(f) === JSON.stringify(DEFAULT_FILTER);
-
-    let menu = null;
-    const kind = this.filterMenu;
-    if (kind) {
-      let options;
-      if (kind === "resolution") {
-        options = [["open", "Open"], ["closed", "Closed"], ["all", "Open and closed"]].map(([value, name]) => ({ value, name, on: f.resolution === value }));
-      } else if (!meta || meta.loading) {
-        options = null;
-      } else {
-        const list = kind === "assignee"
-          ? [{ value: "me", name: "Me" }, ...(meta.users ?? []).filter((u) => u.username && u.username !== me).map((u) => ({ value: u.username, name: u.name }))]
-          : (meta[FIELDS[kind].list] ?? []).map((o) => ({ value: o.name, name: o.name, colour: o.colour, closed: o.closed }));
-        options = list.map((o) => ({ ...o, on: f[kind].includes(o.value) }));
+    const options = (kind) => {
+      if (kind === "project") {
+        const q = this.draftFilter.value().trim().toLowerCase();
+        return (this.projectList ?? []).filter((x) => !q || x.name.toLowerCase().includes(q) || x.permalink.includes(q))
+          .map((x) => ({ id: x.permalink, name: x.name, sub: x.permalink }));
       }
-      const pick = (o, cx) => {
-        if (kind === "resolution") { this.filterMenu = null; this.setFilter(project, { ...f, resolution: o.value }, cx); return; }
-        const values = o.on ? f[kind].filter((v) => v !== o.value) : [...f[kind], o.value];
-        this.setFilter(project, { ...f, [kind]: values }, cx);
-      };
-      menu = v_flex().mx(10).mb(8).p(4).gap(1).rounded(8).border(1).border_color(t.border).bg(t.raised)
-        .child(h_flex().px(6).pt(2).pb(2).items_center()
-          .child(div().flex_1().text_size(11).text_color(t.dim).child(kind === "resolution" ? "Resolution" : TITLES[kind]))
-          .when(kind !== "resolution" && f[kind]?.length > 0, (el) => el.child(this.link(t, "filter-clear", "Any", (cx) => this.setFilter(project, { ...f, [kind]: [] }, cx))))
-          .child(this.link(t, "filter-done", "Done", (cx) => { this.filterMenu = null; cx.notify(); })))
-        .when(!options, (el) => el.child(this.note(t, meta?.error ?? "Loading…", meta?.error ? t.ansi1 : null)))
-        .when(Boolean(options), (el) => el.child(v_flex().id("filter-options").max_h(260).overflow_y_scrollbar().children(options.map((o) =>
-          h_flex().id(`fopt-${kind}-${o.value}`).h(26).px(6).gap(8).rounded(5).items_center().text_size(12)
-            .hover((s) => s.bg(t.hover)).on_click((_e, cx) => pick(o, cx))
-            .child(div().size(14).flex_none().rounded(kind === "resolution" ? 7 : 3).border(1)
-              .border_color(o.on ? t.accent : t.input).bg(o.on ? t.accent : t.background)
-              .flex().items_center().justify_center()
-              .when(o.on, (el) => el.child(svg("mods/tickets/check.svg").size(10).text_color(t.accent_foreground))))
-            .when(Boolean(o.colour), (el) => el.child(div().size(7).rounded(4).flex_none().bg(this.colour(t, o.colour))))
-            .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(o.name))
-            .when(Boolean(o.closed), (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child("closed")))))));
-    }
-
-    return v_flex()
-      .child(h_flex().flex_wrap().px(10).pb(8).gap(4).items_center()
-        .children(kinds.map(button))
-        .when(!isDefault, (el) => el.child(this.link(t, "filter-reset", "Reset", (cx) => { this.filterMenu = null; this.setFilter(project, { ...DEFAULT_FILTER }, cx); }))))
-      .when(Boolean(menu), (el) => el.child(menu));
+      if (!meta?.statuses) return null;
+      if (kind === "status") return meta.statuses.filter((x) => !x.closed);
+      if (kind === "priority") return meta.priorities;
+      if (kind === "type") return meta.types;
+      if (kind === "category") return meta.categories;
+      // People on the project, you first.
+      const users = (meta.users ?? []).filter((u) => u.id != null);
+      return [{ id: null, name: "Unassigned" }, ...users.filter((u) => u.username === me), ...users.filter((u) => u.username !== me)];
+    };
+    const mark = (kind, o) =>
+      kind === "status" ? div().size(7).rounded(4).flex_none().bg(colourOf(t, o?.colour))
+      : kind === "priority" ? svg("mods/tickets/icons/flag.svg").size(13).flex_none().text_color(colourOf(t, o?.colour))
+      : kind === "type" ? svg(typeIcon(o?.icon)).size(13).flex_none().text_color(t.muted)
+      : kind === "category" ? svg("mods/tickets/icons/tag.svg").size(12).flex_none().text_color(t.dim)
+      : kind === "assignee" ? (o?.id == null ? svg("mods/tickets/user.svg").size(14).flex_none().text_color(t.dim) : personBadge(t, o.name, 18, this.pictures.get(o.id)))
+      : svg("mods/tickets/ticket.svg").size(13).flex_none().text_color(t.muted);
+    const select = (kind, title) => {
+      const value = kind === "project" ? (d.project ? { name: d.projectName ?? d.project } : null) : this.draftValue(kind);
+      const open = d.menu === kind;
+      const list = open ? options(kind) : null;
+      return v_flex()
+        .child(label(title))
+        .child(h_flex().id(`new-${kind}`).h(32).px(10).gap(8).rounded(7).items_center().border(1)
+          .border_color(open ? t.accent : t.input).bg(t.background).text_size(12.5).cursor_pointer()
+          .hover((s) => s.border_color(t.accent))
+          .on_click((_e, cx) => { d.menu = open ? null : kind; if (kind === "project") this.ensureProjects(cx); cx.notify(); })
+          .child(mark(kind, value))
+          .child(div().flex_1().min_w(0).truncate().text_color(value ? t.foreground : t.dim)
+            .child(value?.name ?? (kind === "assignee" ? "Unassigned" : kind === "project" ? "Pick a project" : "—")))
+          .child(svg(`mods/tickets/icons/chevron-${open ? "down" : "right"}.svg`).size(12).flex_none().text_color(t.dim)))
+        .when(open, (el) => el.child(v_flex().mt(4).p(4).gap(1).rounded(8).border(1).border_color(t.border).bg(t.raised)
+          .when(kind === "project", (el) => el.child(div().p(2).child(Input.new(this.draftFilter).h(28).px(8).rounded(6).border(1)
+            .border_color(t.input).bg(t.background).text_size(12).text_color(t.foreground))))
+          .when(!list, (el) => el.child(this.note(t, kind === "project" ? (this.projectError ?? "Loading projects…") : (meta?.error ?? "Loading…"))))
+          .when(Boolean(list), (el) => el.child(v_flex().id(`new-${kind}-options`).max_h(240).overflow_y_scrollbar().children(list.map((o) =>
+            h_flex().id(`new-${kind}-${o.id ?? "none"}`).h(28).px(6).gap(8).rounded(5).items_center().text_size(12)
+              .when(kind === "project" ? o.id === d.project : (value?.id ?? null) === (o.id ?? null), (el) => el.bg(t.selected))
+              .hover((s) => s.bg(t.hover))
+              .on_click((_e, cx) => {
+                if (kind === "project") {
+                  if (o.id !== d.project) Object.assign(d, { project: o.id, projectName: o.name, status: undefined, priority: undefined, type: undefined, category: undefined, assignee: undefined });
+                  this.loadChoices(o.id, cx);
+                  this.summary.focus();
+                } else d[kind] = o.id == null && kind === "assignee" ? null : o;
+                d.menu = null;
+                cx.notify();
+              })
+              .child(h_flex().w(18).flex_none().justify_center().child(mark(kind, o)))
+              .child(div().flex_1().min_w(0).truncate().text_color(o.id == null ? t.muted : t.foreground).child(o.name))
+              .when(Boolean(o.sub), (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(o.sub)))))))));
+    };
+    const input = (state) => Input.new(state).h(32).px(10).rounded(7).border(1).border_color(t.input)
+      .bg(t.background).text_size(12.5).text_color(t.foreground);
+    return v_flex().size_full().min_h(0)
+      .child(this.header(t, "New ticket", d.projectName ?? "", [
+        this.button(t, "new-cancel", "Cancel", (cx) => { this.draft = null; this.view = "list"; cx.notify(); }),
+      ]))
+      .child(v_flex().id("new-form").flex_1().min_h(0).overflow_y_scrollbar().px(14).pt(4).pb(14)
+        .child(select("project", "Project"))
+        .when(Boolean(d.project), (el) => el
+          .child(label("Subject")).child(input(this.summary))
+          .child(label("Description"))
+          .child(Textarea.new(this.description).px(10).py(6).rounded(7).border(1).border_color(t.input)
+            .bg(t.background).text_size(12.5).text_color(t.foreground))
+          .child(select("status", TITLES.status))
+          .child(select("priority", TITLES.priority))
+          .child(select("type", TITLES.type))
+          .child(select("category", TITLES.category))
+          .child(select("assignee", TITLES.assignee)))
+        .when(Boolean(d.error), (el) => el.child(div().pt(12).text_size(12).text_color(t.ansi1).child(d.error)))
+        .child(h_flex().pt(16).gap(8)
+          .child(this.button(t, "new-create", d.saving ? "Creating…" : "Create ticket", (cx) => this.submitNew(cx), true))
+          .child(this.button(t, "new-cancel-2", "Cancel", (cx) => { this.draft = null; this.view = "list"; cx.notify(); }))));
   }
 
   renderPicker(t) {

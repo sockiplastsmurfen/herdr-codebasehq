@@ -143,7 +143,7 @@ export async function choices(creds, project) {
     statuses: rows(st, "ticketing_status").sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
       .map((x) => ({ id: x.id, name: x.name, colour: x.colour, closed: Boolean(x.treat_as_closed ?? x["treat-as-closed"]) })),
     priorities: rows(pr, "ticketing_priority").sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
-      .map((x) => ({ id: x.id, name: x.name, colour: x.colour })),
+      .map((x) => ({ id: x.id, name: x.name, colour: x.colour, isDefault: Boolean(x.default) })),
     types: rows(ty, "ticketing_type").map((x) => ({ id: x.id, name: x.name, icon: x.icon ?? null })),
     categories: rows(ca, "ticketing_category").map((x) => ({ id: x.id, name: x.name })).sort(byName),
     users: [{ id: null, name: "Unassigned" }, ...rows(us, "user")
@@ -422,6 +422,18 @@ export async function downloadUpload(creds, appHome, id, name) {
 }
 
 export const commitUrl = (base, project, repo, ref) => `${base}/projects/${project}/repositories/${repo}/commit/${ref}`;
+
+/**
+ * Creates a ticket: fields { summary, description?, status_id?, priority_id?, ticket_type_id?,
+ * category_id?, assignee_id? }. Returns the new ticket (as the list uses them).
+ */
+export async function createTicket(creds, project, fields) {
+  const ticket = Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined && v !== null && v !== ""));
+  const data = await request(creds, "POST", `/${encodeURIComponent(project)}/tickets`, { ticket });
+  const t = data?.ticket ?? data;
+  if (!t?.ticket_id) throw new ApiError("Codebase did not return the new ticket.", 0);
+  return parseTicket(t);
+}
 
 /** Changes a ticket the way Codebase does it: a note with changes ({status_id} or {priority_id}). */
 export async function updateTicket(creds, project, id, changes) {

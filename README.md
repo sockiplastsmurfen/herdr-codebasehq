@@ -4,7 +4,7 @@ A Herdr mod that lists Codebase HQ tickets (by default: yours, open) for the pro
 in the right-hand panel next to Files and Changes.
 
 - **Project from the git remote.** The focused terminal's repo decides the project
-  (`git@codebasehq.com:<account>/<project>/<repo>.git`). **Project** picks another one,
+  (`git@codebasehq.com:<account>/<project>/<repo>.git`). The **folder** icon picks another project,
   or **All projects**, for that repo; the choice is remembered per repo. Outside a Codebase
   repo the default is **All projects**: every active project is asked (8 at a time) and the
   answers are merged, newest first, with the project's name on each card. It refreshes by
@@ -13,7 +13,7 @@ in the right-hand panel next to Files and Changes.
   row of details: status (name and colour), icons for priority (a flag in its colour) and
   type (Codebase's own icon; hover for the name), category with a tag, and the assignee
   with initials. Age is on the right. The **copy icon** copies `#<id> <title>`, the **arrow icon** shows
-  the ticket in the browser. **↻** reloads (it also reloads every 2 minutes).
+  the ticket in the browser. The **reload** icon reloads (it also reloads every 2 minutes).
 - **Filter** with the buttons above the list: resolution (Open, Closed, Open and closed),
   Assignee, Status, Priority, Category and Type. Pick several values in one filter; **Any**
   clears it, **Reset** goes back to the default `assignee:me resolution:open`. The filter is
@@ -33,12 +33,28 @@ in the right-hand panel next to Files and Changes.
   the message up in the project's repositories: the ticket's own branches (`123`, `123-…`,
   `ticket-123`), else `dev` and the default branch. Clicking
   another title shows that ticket in the same pane; clicking the shown one again closes it.
+- **New ticket** (the **+** icon): a form with subject, description (Markdown), status,
+  priority, type, category and assignee, filled in with the project's defaults (its first open
+  status, its default priority). In a project it is for that project; in All projects you pick
+  the project first. The new ticket opens in the ticket pane.
+- **Kanban** (the board icon, in a project, not All projects) shows the project's open tickets as a board in
+  a pane of its own (the list's side panel closes; the Tickets button opens it again), zoomed to the whole work area (opening the ticket pane unzooms it, so the
+  two show side by side): a column per status, in the project's order (the closed ones, like Completed,
+  last, with only the 20 most recently updated closed tickets), with priority, type,
+  category, age and assignee on each card; click one of them to change it, as in the list.
+  It has the list's filters, with nothing picked by default (kept per project): resolution picks
+  the open or closed columns, status the columns shown.
+  Click a card's title to open or close the ticket pane, as in the list.
+  Drag a card to another column to change
+  its status (saved like a change in Codebase; it moves back if Codebase refuses). Click the board icon again to close the pane. Every icon button names what it does in a tooltip.
 - **Change status, priority, type, category or assignee** by clicking it on a card: the project's own values
   open below it (statuses that close the ticket say so). The change is saved as a
   Codebase note with changes, like in the web UI; a closed ticket leaves the list.
 - **People** show with their Codebase picture (from Gravatar or Codebase) where they have
   one, else with their initials on a colour of their own. Pictures are downloaded once into
   `~/.config/herdr-app/data/tickets-images/avatars/`.
+- **Stays in step**: a change made on the board or in the ticket pane reloads the list, and a
+  change made in the list reloads the board (and the ticket, if it is the one shown).
 - **Credentials** (API username `account/username` and API key, from My Profile →
   API Credentials in Codebase) are entered in the panel the first time and kept in the
   macOS keychain under the service `herdr-codebasehq`.

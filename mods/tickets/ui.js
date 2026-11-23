@@ -2,6 +2,17 @@ import { div, image } from "gpui-kit";
 
 // Small pieces the list and the ticket view share.
 
+// The fields a card shows and lets you change: where their choices are in choices(), what the
+// API calls the change, and the ticket's own keys for the id, the name and a colour or icon.
+export const FIELDS = {
+  status:   { list: "statuses",   change: "status_id",   id: "statusId",   name: "status",   colour: "statusColour" },
+  priority: { list: "priorities", change: "priority_id", id: "priorityId", name: "priority", colour: "priorityColour" },
+  // Codebase calls a ticket's type ticket_type_id in a change (type_id is ignored).
+  type:     { list: "types",      change: "ticket_type_id", id: "typeId",  name: "type",     icon: "typeIcon" },
+  category: { list: "categories", change: "category_id", id: "categoryId", name: "category" },
+  assignee: { list: "users",      change: "assignee_id", id: "assigneeId", name: "assignee" },
+};
+
 export const TITLES = { status: "Status", priority: "Priority", type: "Type", category: "Category", assignee: "Assigned to" };
 
 // Codebase's type icon names -> ours.
@@ -67,3 +78,15 @@ export function wantPictures(owner, ids, cx, download, home) {
     cx.notify();
   });
 }
+
+// Every copy of the mod (the panel, the ticket pane) keeps its own tickets. After a change,
+// the one that made it says so in shared("tickets.changed"); the others reload.
+export const CHANGED = "tickets.changed";
+let copies = 0;
+/** A token for this copy, so it can skip its own announcements. */
+export const copyId = () => `copy-${Date.now()}-${++copies}`;
+/** Tells the other copies that a ticket in a project changed. */
+export function announceChange(setShared, from, project, id) {
+  setShared(CHANGED, { from, project, id, at: Date.now() });
+}
+

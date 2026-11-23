@@ -2,25 +2,28 @@
 //   Opened by the list (clicking a ticket's title) with
 //   pane.split {mod: "tickets", props: {view: "ticket", project, id}}.
 //   Which ticket it shows is shared("tickets.open"), so clicking another title in the list
-//   shows that one here instead of opening a second pane.
+//   shows that one here instead of opening a second pane. Opened with props.view "kanban", the
+//   copy is the board pane instead, following shared("tickets.board"); both can be open at once.
 import { div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, TextView } from "gpui-base";
-import { exec, props, shared, checking, settings, spaces, appHome } from "herdr";
+import { exec, props, shared, setShared, checking, settings, spaces, appHome } from "herdr";
 import {
   loadCredentials, accountOf, ticketDetail, ticketNotes, accountUsers, ticketUrl, defaultBase, ago,
   noteCommits, commitUrl, plainMessage as plainText, findClone, commitDiff, uploadId, downloadUpload,
   downloadAvatars,
 } from "./codebase.js";
-import { TITLES, typeIcon, initials, colourOf, personColour, personBadge, wantPictures } from "./ui.js";
+import { TITLES, typeIcon, initials, colourOf, personColour, personBadge, wantPictures, CHANGED, copyId } from "./ui.js";
+import { fetchBoard, boardView } from "./kanban.js";
+import { NO_FILTER, searchOf } from "./filters.js";
 
-const CHECK = 300;        // look at shared("tickets.open") (no request unless it changed)
+const CHECK = 300;        // look at what to show (no request unless it changed)
 const REFRESH = 60000;    // new notes
 
 // What a note's "updates" names its fields.
 const UPDATE_NAMES = {
   status_id: "Status", priority_id: "Priority", assignee_id: "Assigned to", category_id: "Category",
-  type_id: "Type", milestone_id: "Milestone", summary: "Summary", deadline: "Deadline", start_on: "Start",
-  estimated_time: "Estimate", tags: "Tags",
+  type_id: "Type", ticket_type_id: "Type", milestone_id: "Milestone", summary: "Summary", subject: "Summary",
+  deadline: "Deadline", start_on: "Start", estimated_time: "Estimate", estimated_time_string: "Estimate", tags: "Tags",
 };
 
 const errText = (e) => String(e?.message ?? e);
@@ -100,6 +103,8 @@ function imagesBelow(n) {
 export class Viewer {
   init(cx) {
     this.creds = undefined;
+    this.me = copyId();         // to know our own change announcements (the board's)
+    this.seenChange = shared(CHANGED)?.at ?? 0;
     this.key = undefined;       // "<project>-<id>" being shown
     this.ref = null;            // { project, id, projectName }
     this.ticket = null;
@@ -111,6 +116,8 @@ export class Viewer {
     this.clones = new Map();    // clone url -> local folder (or null: none here)
     this.images = new Map();    // upload id -> { open, loading, path, width, height, error }
     this.people = null;         // = this.users once loaded (wantPictures reads it)
+    try { this.boardFilters = JSON.parse(localStorage.getItem("boardFilters") ?? "{}") ?? {}; } catch { this.boardFilters = {}; }
+    this.boardFilterMenu = null; // the board filter whose values are open
     this.pictures = new Map();  // user id -> picture path (or null: initials)
     this.width = 0;             // the pane's width, for scaling images
     this.looking = false;       // looking the commits up
@@ -125,21 +132,35 @@ export class Viewer {
       this.check(cx);
       cx.notify();
     });
-    cx.timer.every(CHECK, (cx) => this.check(cx));
+    cx.timer.every(CHECK, (cx) => { this.check(cx); this.followChanges(cx); });
     cx.timer.every(REFRESH, (cx) => this.load(cx));
   }
 
+  /** What to show: a ticket ({project, id}) or a project's board ({view: "kanban", project}). */
+  /** A ticket changed in the panel: the board (or the ticket, if it is that one) reloads. */
+  followChanges(cx) {
+    const c = shared(CHANGED);
+    if (!c?.at || c.at <= this.seenChange) return;
+    this.seenChange = c.at;
+    if (c.from === this.me || !this.ref || c.project !== this.ref.project) return;
+    if (this.ref.view === "kanban" || c.id === this.ref.id) this.load(cx);
+  }
+
   wanted() {
-    const s = shared("tickets.open");
-    if (s?.project && s?.id) return s;
+    const board = props()?.view === "kanban";
+    const s = shared(board ? "tickets.board" : "tickets.open");
+    if (board && s?.project) return { ...s, view: "kanban" };
+    if (!board && s?.project && s?.id) return s;
+    // Nothing shared (yet): what the pane was opened with.
     const p = props() ?? {};
+    if (p.view === "kanban" && p.project) return { view: "kanban", project: p.project, projectName: p.projectName };
     return p.project && p.id ? { project: p.project, id: p.id, projectName: p.projectName } : null;
   }
 
   check(cx) {
     if (this.creds === undefined) return;
     const w = this.wanted();
-    const key = w ? `${w.project}-${w.id}` : null;
+    const key = !w ? null : w.view === "kanban" ? `kanban:${w.project}` : `${w.project}-${w.id}`;
     if (key === this.key) return;
     this.key = key;
     this.ref = w;
@@ -147,6 +168,8 @@ export class Viewer {
     this.notes = null;
     this.commits = new Map();
     this.checked = new Set();
+    // Going back to the same board shows it at once and refreshes it.
+    if (this.board?.project !== w?.project || w?.view !== "kanban") this.board = null;
     this.error = this.creds ? null : this.error;
     this.load(cx);
     cx.notify();
@@ -156,6 +179,7 @@ export class Viewer {
     const ref = this.ref;
     if (!ref || !this.creds || this.loading) return;
     this.loading = true;
+    if (ref.view === "kanban") return this.loadBoard(ref, cx);
     cx.spawn(async (cx) => {
       try {
         const [ticket, notes, users] = await Promise.all([
@@ -177,6 +201,45 @@ export class Viewer {
       this.loading = false;
       // Another ticket was picked while this one loaded: load that one now.
       if (this.ref !== ref) this.load(cx);
+      cx.notify();
+    });
+  }
+
+  /** The board's filter for a project: nothing picked unless chosen (filters.js). */
+  boardFilter(project) {
+    return { ...NO_FILTER, ...(this.boardFilters[project] ?? {}) };
+  }
+
+  setBoardFilter(project, f, cx) {
+    this.boardFilters[project] = f;
+    try { localStorage.setItem("boardFilters", JSON.stringify(this.boardFilters)); } catch {}
+    // Reload now, or as soon as the load under way is done.
+    if (this.loading) this.boardAgain = true; else this.load(cx);
+    cx.notify();
+  }
+
+  loadBoard(ref, cx) {
+    const filter = this.boardFilter(ref.project);
+    cx.spawn(async (cx) => {
+      try {
+        const [board, users] = await Promise.all([
+          fetchBoard(this.creds, ref.project, filter),
+          this.users ?? accountUsers(this.creds).catch(() => ({ byId: new Map(), byUsername: new Map(), idByName: new Map(), avatars: new Map() })),
+        ]);
+        this.users = users;
+        this.people = users;
+        if (this.ref === ref) {
+          this.board = { project: ref.project, ...board, error: null };
+          wantPictures(this, board.tickets.map((k) => k.assigneeId), cx, downloadAvatars, appHome());
+        }
+      } catch (e) {
+        if (this.ref === ref) this.board = { project: ref.project, ...(this.board ?? {}), error: errText(e) };
+      }
+      this.loading = false;
+      // The filter changed while this loaded, or another view was picked: load again.
+      const again = this.boardAgain || searchOf(this.boardFilter(ref.project)) !== searchOf(filter);
+      this.boardAgain = false;
+      if (this.ref !== ref || again) this.load(cx);
       cx.notify();
     });
   }
@@ -360,21 +423,23 @@ export class Viewer {
     const root = v_flex().id("ticket-view").size_full().min_h(0).bg(t.surface).text_color(t.foreground)
       .on_size_change((size, cx) => { if (Math.abs(size.width - this.width) > 1) { this.width = size.width; cx.notify(); } });
     const note = (text, color) => div().p(16).text_size(12.5).text_color(color ?? t.dim).child(text);
-    if (!this.ref) return root.child(note("Click a ticket's title in the Tickets panel to see it here."));
-    if (this.error && !this.ticket) return root.child(note(this.error, t.ansi1));
-    if (!this.ticket) return root.child(note(`Loading #${this.ref.id}…`));
-
-    const k = this.ticket, base = this.base(), url = ticketUrl(base, this.ref.project, k.id);
-    const iconButton = (id, path, onClick, color) =>
-      div().id(id).flex_none().size(26).rounded(6).flex().items_center().justify_center()
-        .text_color(color ?? t.dim).hover((s) => s.bg(t.hover).text_color(color ?? t.foreground))
-        .on_click((_e, cx) => onClick(cx)).child(svg(path).size(14));
     // A person's badge: their picture when they have one (by id, or found by name for commit
     // authors), else initials.
     const avatar = (name, size, id) => {
       const uid = id ?? this.users?.idByName?.get((name ?? "").toLowerCase());
       return personBadge(t, name, size, uid != null ? this.pictures.get(uid) : null);
     };
+    if (!this.ref) return root.child(note("Click a ticket's title in the Tickets panel to see it here."));
+    if (this.ref.view === "kanban") return root.child(boardView(this, t, avatar));
+    if (this.error && !this.ticket) return root.child(note(this.error, t.ansi1));
+    if (!this.ticket) return root.child(note(`Loading #${this.ref.id}…`));
+
+    const k = this.ticket, base = this.base(), url = ticketUrl(base, this.ref.project, k.id);
+    const iconButton = (id, path, onClick, color, tip) =>
+      div().id(id).flex_none().size(26).rounded(6).flex().items_center().justify_center()
+        .text_color(color ?? t.dim).hover((s) => s.bg(t.hover).text_color(color ?? t.foreground))
+        .tooltip(tip)
+        .on_click((_e, cx) => onClick(cx)).child(svg(path).size(14));
 
     const field = (label, value) => h_flex().gap(8).min_h(22).items_center()
       .child(div().w(96).flex_none().text_size(12).text_color(t.dim).child(label))
@@ -383,6 +448,7 @@ export class Viewer {
 
     const header = v_flex().flex_none().px(18).pt(14).pb(14).gap(10).border_b(1).border_color(t.border)
       .child(h_flex().items_center().gap(6)
+        // Opened from the board: back to it.
         .child(div().flex_1().min_w(0).text_size(11.5).text_color(t.dim).truncate()
           .child(`${this.ref.projectName ?? this.ref.project}${this.loading ? " · updating…" : ""}`))
         .child(iconButton("view-copy", this.copied ? "mods/tickets/check.svg" : "mods/tickets/copy.svg", (cx) => {
@@ -390,8 +456,8 @@ export class Viewer {
           this.copied = true;
           cx.timer.after(1500, (cx) => { this.copied = false; cx.notify(); });
           cx.notify();
-        }, this.copied ? t.ansi2 : null))
-        .child(iconButton("view-open", "mods/tickets/external.svg", () => { exec("open", [url]).catch(() => {}); })))
+        }, this.copied ? t.ansi2 : null, this.copied ? "Copied" : `Copy "#${k.id} ${k.summary}"`))
+        .child(iconButton("view-open", "mods/tickets/external.svg", () => { exec("open", [url]).catch(() => {}); }, null, "Open in Codebase")))
       .child(h_flex().gap(10).items_start()
         .child(div().flex_none().text_size(17).font_semibold().text_color(t.muted).child(`#${k.id}`))
         .child(div().flex_1().min_w(0).text_size(17).font_semibold().child(k.summary)))
