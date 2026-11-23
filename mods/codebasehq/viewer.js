@@ -319,6 +319,7 @@ export class Viewer {
       this.ticket = ticket; this.notes = notes; this.error = null;
       this.loadMeta(ref.project, cx);
       this.findCommits(ref, notes, cx);
+      this.openInlineImages(notes, cx);
       // Pictures for the people shown: note authors, the assignee, the reporter.
       wantPictures(this, [...notes.map((n) => n.userId), ticket.assigneeId, ticket.reporterId], cx);
     } catch (e) {
@@ -698,6 +699,19 @@ export class Viewer {
   toggleImage(img, cx) {
     const d = this.images.get(img.id);
     if (d) { d.open = !d.open; cx.notify(); return; }
+    this.fetchImage(img, cx);
+  }
+
+  /** Images in a note's text show unfolded: each is downloaded (once) as soon as the notes are in. */
+  openInlineImages(notes, cx) {
+    const base = this.base();
+    for (const n of notes) {
+      for (const b of prepareNote(n, base).content) if (b.image && !this.images.has(b.image.id)) this.fetchImage(b.image, cx);
+    }
+  }
+
+  /** Downloads an image through the API (see downloadUpload), shown unfolded once it is in. */
+  fetchImage(img, cx) {
     const entry = { open: true, loading: true, path: null, width: 0, height: 0, error: null };
     this.images.set(img.id, entry);
     cx.notify();
@@ -709,7 +723,11 @@ export class Viewer {
     });
   }
 
-  /** Shows an attachment in a Herdr dialog (fileview.js): its pages, Download, Quick Look. */
+  /**
+   * Shows an attachment, or an image clicked in a note, in a Herdr dialog (fileview.js): its
+   * pages or the picture, Download, Quick Look. An image named without an extension gets ".png"
+   * (the dialog goes by the extension; the picture is read by its content).
+   */
   openFile(a, base) {
     const url = a.url?.startsWith("/") ? base + a.url : a.url;
     openOverlay({ mod: "codebasehq", kind: "dialog", width: 0.8, height: 0.9, props: { view: "file", id: a.id, name: a.name, url } });
@@ -770,8 +788,9 @@ export class Viewer {
       .when(Boolean(d?.open), (el) => el.child(
         d.loading ? div().py(4).text_size(12).text_color(t.dim).child("Loading the image…")
         : d.error ? div().py(4).text_size(12).text_color(t.ansi1).child(d.error)
-        : w && h ? image(d.path).w(w).h(h).rounded(4)
-        : image(d.path).w_full().h(240)));
+        : div().id(`img-show-${n.id}-${img.id}`).cursor_pointer().tooltip("Show it larger")
+          .on_click(() => this.openFile({ ...img, name: /\.\w+$/.test(img.name ?? "") ? img.name : `${img.name || "image"}.png` }, base))
+          .child(w && h ? image(d.path).w(w).h(h).rounded(4) : image(d.path).w_full().h(240))));
   }
 
   /** A diff (diffRows), line by line: files as headings, additions green, removals red, hunks dim. */

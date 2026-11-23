@@ -59,7 +59,9 @@ A [Herdr](https://herdr.dev) mod for [Codebase HQ](https://www.codebasehq.com) t
   a commit the clone lacks is fetched first). The API doesn't say which commit made a note, so
   the pane looks the message up in the project's repositories: the ticket's own branches
   (`123`, `123-…`, `ticket-123`), else `dev` and the default branch.
-- **Images** in notes: click to see the image in the pane, scaled to fit; the arrow icon opens
+- **Images** in notes: those in the text show at once, scaled to fit the pane; attached ones
+  below the text show when clicked. Click an image to see it larger, in the attachment
+  dialog. The chevron folds an image away; the arrow icon opens
   it in the browser. They are downloaded through the API (`/uploads/<id>`) once and kept in
   `~/.config/herdr-app/data/codebasehq-images/`.
 - **Attachments**: click one to see it in a Herdr dialog (Esc closes it). PDFs and Word, RTF and

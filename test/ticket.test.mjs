@@ -82,3 +82,19 @@ click(tree, "mention-sam", cx);
 check("picking someone puts @username in the text", v.response.value() === "Thanks @sam " && !v.reply.mention, v.response.value());
 v.response.type("mail me@example.com", cx);
 check("an @ inside a word offers no one", !v.reply.mention);
+
+// An image in a note's text shows unfolded; one attached below it stays folded.
+v.notes[0].content = "Here it is:\n\n![screen](/upload/bbbbbbbbbbbbbbbbbbbb1/show/original)\n\nAs you see.";
+v.notes[0].attachments = [{ name: "other.png", url: "/upload/bbbbbbbbbbbbbbbbbbbb2/show/original", id: "bbbbbbbbbbbbbbbbbbbb2", type: "image/png" }];
+v.notes[0].prep = null;
+v.openInlineImages(v.notes, cx);
+check("an image in the text unfolds by itself", v.images.get("bbbbbbbbbbbbbbbbbbbb1")?.open === true);
+check("an attached image below the text stays folded", !v.images.has("bbbbbbbbbbbbbbbbbbbb2"));
+await settle(3);
+click(v.render(t), `img-${v.notes[0].id}-bbbbbbbbbbbbbbbbbbbb1`, cx);
+check("its arrow still folds it", v.images.get("bbbbbbbbbbbbbbbbbbbb1")?.open === false);
+click(v.render(t), `img-${v.notes[0].id}-bbbbbbbbbbbbbbbbbbbb1`, cx);
+v.images.get("bbbbbbbbbbbbbbbbbbbb1").loading = false; v.images.get("bbbbbbbbbbbbbbbbbbbb1").error = null; v.images.get("bbbbbbbbbbbbbbbbbbbb1").path = "data/x.png";
+click(v.render(t), `img-show-${v.notes[0].id}-bbbbbbbbbbbbbbbbbbbb1`, cx);
+const shown = world.overlays.at(-1);
+check("clicking the image shows it in the dialog, as a picture", shown?.kind === "dialog" && shown.props.id === "bbbbbbbbbbbbbbbbbbbb1" && shown.props.name === "screen.png", shown);
