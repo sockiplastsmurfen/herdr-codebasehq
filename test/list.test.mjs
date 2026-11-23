@@ -7,7 +7,7 @@ const { default: Tickets } = await import("../mods/codebasehq/main.js");
 const cx = makeCx();
 const list = new Tickets();
 list.init(undefined, cx);
-await settle(); list.watch(cx); await settle(5);
+await settle(); list.watch(cx); await settle();
 
 const p = list.project();
 check("in the shop's checkout the list is the shop's", p.permalink === "example-shop" && p.source === "from git remote", p);
@@ -29,21 +29,22 @@ await settle();
 check("… and saves it as a change", world.saved.some((s) => s.kind === "update" && s.id === k.id && s.changes.priority_id === 21), world.saved);
 
 // Search.
-list.searchInput.set_value("cookie banner"); list.searchChanged(cx, true); await settle(5);
+list.searchInput.set_value("cookie banner"); list.searchChanged(cx, true); await settle();
 check("words search with the filter", list.searchFor("example-shop") === "assignee:me resolution:open cookie banner");
 check("… and the list follows", list.entryFor("example-shop").tickets?.map((x) => x.id).join() === "118", list.entryFor("example-shop").tickets?.map((x) => x.id));
-list.searchInput.set_value("#117"); list.searchChanged(cx, true); await settle(5);
+list.searchInput.set_value("#117"); list.searchChanged(cx, true); await settle();
 check("#117 is that ticket", list.entryFor("example-shop").tickets?.map((x) => x.id).join() === "117");
 list.searchInput.set_value("gift"); list.searchChanged(cx);
 check("while typing it waits", list.searchText === "#117");
-await settle(3);
+await settle();
 check("… and searches a moment later", list.searchText === "gift");
-click(list.render(), "search-clear", cx); await settle(5);
+click(list.render(), "search-clear", cx); await settle();
 check("× clears the search", list.searchText === "" && list.entryFor("example-shop").tickets?.length === 6);
 
 // All projects.
-list.choose("*", cx); await settle(8);
-check("All projects asks every project", list.project().all && list.entryFor("*").tickets?.length === 6);
+world.asked.length = 0;
+list.choose("*", cx); await settle();
+check("All projects asks every project", list.project().all && ["example-blog", "example-shop"].every((p) => world.asked.includes(p)) && list.entryFor("*").tickets?.length === 6, world.asked);
 const merged = list.mergedChoices();
 check("its filter values are merged once, not per render", merged === list.mergedChoices() && merged.statuses?.length > 0);
 tree = list.render();
@@ -57,20 +58,20 @@ sendCommand("open:example-shop:117"); await settle();
 check("a note notification's click shows the ticket", world.shared["codebasehq.open"]?.uid === "example-shop-117", world.shared["codebasehq.open"]);
 
 // The list puts the most urgent first, the most recently updated first within a priority.
-list.choose(null, cx); await settle(6);
+list.choose(null, cx); await settle();
 const shown = list.ordered(list.entryFor("example-shop")).map((x) => `${x.priority}#${x.id}`);
 // (#118 became Critical above.)
 check("the most urgent priority first; within one, started, other open, then new", shown.join(" ") === "Critical#118 High#117 Normal#112 Normal#121 Low#115 Low#109", shown.join(" "));
-list.filters["example-shop"] = { ...list.filterFor("example-shop"), assignee: [], resolution: "all" }; list.load(cx, true); await settle(6);
+list.filters["example-shop"] = { ...list.filterFor("example-shop"), assignee: [], resolution: "all" }; list.load(cx, true); await settle();
 const all = list.ordered(list.entryFor("example-shop")).filter((x) => x.priority === "Normal").map((x) => `${x.status}#${x.id}`);
 check("… closed ones last (Open and closed)", all.join(" ") === "Accepted#116 Review#114 Accepted#112 New#122 New#121 New#119 Invalid#110 Completed#108", all.join(" "));
 
 // In All projects, a change made in another copy asks only that project again.
 {
-  list.choose("*", cx); await settle(8);
+  list.choose("*", cx); await settle();
   world.asked.length = 0;
   world.shared["codebasehq.changed"] = { from: "another-copy", project: "example-shop", id: 121, ids: [121], at: Date.now() };
-  list.followChanges(cx); await settle(4);
+  list.followChanges(cx); await settle();
   check("a change elsewhere in All projects asks only its project again", world.asked.join() === "example-shop", world.asked);
-  list.choose(null, cx); await settle(6);
+  list.choose(null, cx); await settle();
 }

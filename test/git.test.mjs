@@ -7,6 +7,9 @@ import { world } from "./fake/herdr.mjs";
 import { startBranch, currentBranch } from "../mods/codebasehq/codebase.js";
 
 world.real = true;
+// The machine's own git config (signing, hooks, the default branch) stays out of it.
+process.env.GIT_CONFIG_GLOBAL = "/dev/null";
+process.env.GIT_CONFIG_NOSYSTEM = "1";
 const dir = mkdtempSync(`${tmpdir()}/codebasehq-git-`);
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, stdio: "pipe", env: { ...process.env, GIT_AUTHOR_NAME: "Test", GIT_AUTHOR_EMAIL: "test@example.com", GIT_COMMITTER_NAME: "Test", GIT_COMMITTER_EMAIL: "test@example.com" } }).toString();
 try {

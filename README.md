@@ -144,6 +144,7 @@ Node 20.6 or later, no dependencies. The mod runs as it is: a module hook gives 
 Herdr's modules fakes (`test/fake/gpui.mjs` keeps what a view draws so a test can find and
 click things, `test/fake/herdr.mjs` the spaces, panes and focus Herdr would report), and its
 `codebase.js` answers from mock data (`test/fake/demo.mjs`: an invented shop, people and
-tickets) wherever it would reach Codebase, the keychain or a checkout. A handler's `cx` stops
-working after the call, as in Herdr. `git.test.mjs` runs git for real in a repository it makes,
+tickets) wherever it would reach Codebase, the keychain or a checkout; the network is off, so a
+call the mock doesn't answer fails the test. A handler's `cx` stops working after the call, as in
+Herdr, and `settle()` waits until the mod's tasks and timers are done (a hung one fails). `git.test.mjs` runs git for real in a repository it makes,
 and `macos.test.mjs` (macOS only) makes attachment pages with the real tools, in temporary folders.

@@ -10,8 +10,9 @@ const files = readdirSync(dir).filter((f) => f.endsWith(".test.mjs") && (!only.l
 let bad = 0;
 for (const f of files) {
   console.log(`${f}`);
-  const r = spawnSync(process.execPath, ["--import", "./register.mjs", `./${f}`], { cwd: dir, encoding: "utf8", env: { ...process.env, NODE_NO_WARNINGS: "1" } });
-  process.stdout.write(r.stdout);
+  const r = spawnSync(process.execPath, ["--import", "./register.mjs", `./${f}`], { cwd: dir, encoding: "utf8", timeout: 60000, env: { ...process.env, NODE_NO_WARNINGS: "1" } });
+  process.stdout.write(r.stdout ?? "");
+  if (r.error?.code === "ETIMEDOUT") console.log("  FAIL  timed out after 60 seconds");
   if (r.stderr.trim()) process.stdout.write(r.stderr.split("\n").map((l) => `  ${l}`).join("\n") + "\n");
   if (r.status !== 0) bad++;
 }

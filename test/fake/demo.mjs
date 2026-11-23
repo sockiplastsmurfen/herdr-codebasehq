@@ -212,5 +212,12 @@ export async function createTicket(_creds, project, fields) {
   return { ...TICKETS[0], id: 123, summary: fields.summary };
 }
 export async function findClone() { return null; }
+export async function repositories(_creds, project) {
+  return project === "example-blog" ? [{ permalink: "blog", name: "blog", defaultBranch: "main", cloneUrl: "git@codebasehq.com:example/example-blog/blog.git" }] : [];
+}
+export async function cloneRepository(_url, parent, name) { world.saved.push({ kind: "clone", parent, name }); return `${parent}/${name}`; }
+export async function findProjectCheckout() { return null; }
+/** The macOS file chooser: what world.choose() gives (a test can hold it open with a promise). */
+export async function chooseFiles() { return world.choose ? world.choose() : []; }
 export async function commitDiff() { throw new Error("Mock data: no diff."); }
 export async function downloadUpload() { throw new Error("Mock data: no images."); }

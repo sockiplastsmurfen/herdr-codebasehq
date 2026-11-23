@@ -1,6 +1,6 @@
 // The mod's pure functions: names, patterns, the search the filters make.
 import { check } from "./lib.mjs";
-import { branchName, validBranch, isTicketBranch, canShow, expandHome } from "../mods/codebasehq/codebase.js";
+import { branchName, validBranch, isTicketBranch, canShow, expandHome, ticketPage } from "../mods/codebasehq/codebase.js";
 import { searchOf, NO_FILTER, UNASSIGNED } from "../mods/codebasehq/filters.js";
 
 check("a branch is the ticket number and the summary's words", branchName(583, "Drupal 11 i november/december") === "583-drupal-11-i-november-december");
@@ -16,10 +16,7 @@ check("~ is the home folder", expandHome("~/Sites/") === "/Users/demo/Sites" && 
 check("the filter becomes Codebase's search", searchOf({ ...NO_FILTER, assignee: ["me"], status: ["In Progress", "New"], resolution: "open" }) === 'assignee:me status:"In Progress",New resolution:open');
 check("Unassigned is a term of its own, ORed with the others", searchOf({ ...NO_FILTER, assignee: [UNASSIGNED, "me"] }) === "assignee:none assignee:me");
 check("no resolution term when asked not to", searchOf({ ...NO_FILTER, resolution: "open" }, false) === "");
-import { world } from "./fake/herdr.mjs";
-import { ticketPage } from "../mods/codebasehq/codebase.js";
 // The list asks Codebase for the most urgent first, so its next pages carry on in that order.
-world.exec = () => undefined;
 const asked = [];
 globalThis.fetch = async (url) => { asked.push(decodeURIComponent(String(url))); return { ok: true, status: 200, json: async () => [], text: async () => "[]" }; };
 await ticketPage({ user: "a/b", key: "k" }, "shop", "assignee:me", 1, "priority").catch(() => {});

@@ -1,6 +1,6 @@
 // Small helpers for the tests: checks, waiting for the mod's tasks, a cx, and finding,
 // reading and clicking things in a rendered view.
-import { theme } from "./fake/herdr.mjs";
+import { theme, world } from "./fake/herdr.mjs";
 
 let failed = 0, passed = 0;
 
@@ -14,16 +14,29 @@ export function check(name, ok, seen) {
 process.on("exit", () => console.log(`  ${passed} passed${failed ? `, ${failed} failed` : ""}`));
 process.on("unhandledRejection", (e) => check("no error in a task", false, String(e?.stack ?? e).split("\n").slice(0, 3).join(" | ")));
 
-/** Lets the mod's spawned tasks and timers run. */
-export const settle = async (rounds = 3) => { for (let i = 0; i < rounds; i++) await new Promise((r) => setTimeout(r, 15)); };
+// The mod's tasks and timers still to run (through makeCx). A task waiting in nextCommand() for
+// good (the panel's command loop) doesn't count.
+let running = 0, timers = 0;
+const quiet = () => running - world.commands.length <= 0 && timers === 0;
+
+/**
+ * Lets the mod's spawned tasks and timers run until there are none (a check fails if they
+ * don't end within about a second). settle(n): just n short rounds, for a test that holds a
+ * task open on purpose (a git run or an upload it lets go of later).
+ */
+export async function settle(rounds) {
+  const tick = () => new Promise((r) => setTimeout(r, 2));
+  if (typeof rounds === "number") { for (let i = 0; i < rounds; i++) await tick(); return; }
+  for (let i = 0; i < 500; i++) { await tick(); if (i > 1 && quiet()) return; }
+  check("the mod's tasks come to an end", false, { running, timers });
+}
 
 /** A cx as the mod gets one: spawn runs the task, timers run soon (once), notify counts. */
 export function makeCx() {
   const cx = {
-    notified: 0,
-    spawn(fn) { Promise.resolve().then(() => fn(cx)); return {}; },
-    timer: { every() {}, after(_ms, fn) { setTimeout(() => fn(cx), 5); } },
-    notify() { this.notified++; },
+    spawn(fn) { running++; Promise.resolve().then(() => fn(cx)).finally(() => running--); return {}; },
+    timer: { every() {}, after(_ms, fn) { timers++; setTimeout(() => { timers--; fn(cx); }, 5); } },
+    notify() {},
     sleep: () => new Promise((r) => setTimeout(r, 1)),
     open_url(url) { cx.opened = url; },
     write_to_clipboard(text) { cx.clipboard = text; },
@@ -49,6 +62,15 @@ export function findHandler(node, event) {
   if (!e || typeof e !== "object") return null;
   if (e.on?.[event]) return e;
   for (const c of e.kids ?? []) { const f = findHandler(c, event); if (f) return f; }
+  return null;
+}
+
+/** The first element whose tag is this ("img:<path>", "svg:<path>", …), or null. */
+export function findTag(node, tag) {
+  const e = node?.__el ?? node;
+  if (!e || typeof e !== "object") return null;
+  if (e.tag === tag) return e;
+  for (const c of e.kids ?? []) { const f = findTag(c, tag); if (f) return f; }
   return null;
 }
 

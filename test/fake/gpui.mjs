@@ -1,11 +1,7 @@
 // A fake of gpui-kit and gpui-base: every builder method returns its element, which keeps its
 // id, its children and its handlers, so a test can render a view and find and click things.
-let made = 0;
-export const elementsMade = () => made;
-
 function el(tag) {
   const e = { tag, kids: [], on: {}, id: null };
-  made++;
   const api = new Proxy(e, {
     get(_o, k) {
       if (k === "__el") return e;
@@ -46,8 +42,12 @@ class State {
   /** Replaces the selection, as typing would. */
   replace(text) { this.v = this.v.slice(0, this.sel.start) + text + this.v.slice(this.sel.end); const at = this.sel.start + text.length; this.sel = { start: at, end: at }; }
   on(event, handler) { this.handlers[event] = handler; return true; }
-  /** A test types: sets the value and runs the change handler (with this cx). */
-  type(v, cx) { this.set_value(v); this.handlers.change?.({}, cx); }
+  /** A test types: sets the value and runs the change handler (its cx good during the call, as in Herdr). */
+  type(v, cx) {
+    this.set_value(v);
+    const { proxy, revoke } = Proxy.revocable(cx, {});
+    try { this.handlers.change?.({}, proxy); } finally { revoke(); }
+  }
   focus() {} set_masked() {} set_auto_grow() {}
 }
 export const InputState = State, TextareaState = State;

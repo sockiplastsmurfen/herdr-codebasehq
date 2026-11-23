@@ -8,10 +8,10 @@ const { Viewer } = await import("../mods/codebasehq/viewer.js");
 const cx = makeCx();
 const v = new Viewer();
 v.init(cx);
-await settle(5);
+await settle();
 
 let tree = v.render(t);
-check("a column per status, in order", ["New", "Accepted", "In Progress", "Review", "Completed", "Invalid"].every((s) => text(tree).includes(s)));
+check("a column per status, in the project's order", v.board.columns.map((c) => c.name).join() === "New,Accepted,In Progress,Review,Completed,Invalid", v.board.columns.map((c) => c.name));
 const columns = v.board.columns;
 v.render(t);
 check("the columns are worked out once, not per render", columns && v.board.columns === columns);
@@ -27,7 +27,7 @@ click(tree, `col-${accepted.id}`, cx, "on_mouse_up");
 check("letting go there changes the status at once", card.status === "Accepted");
 v.render(t);
 check("… and the card is first in its new column", v.board.columns.find((c) => c.id === accepted.id).tickets[0] === card);
-await settle(4);
+await settle();
 check("… and it is saved", world.saved.some((s) => s.kind === "update" && s.id === card.id && s.changes.status_id === accepted.id));
 
 // A card's menu.
@@ -37,7 +37,7 @@ check("a card's menu lists the people", /Sam Lee/.test(text(v.render(t))));
 // The Unassigned filter, with the project's values kept.
 const meta = v.board.meta;
 v.setBoardFilter("example-shop", { ...v.boardFilter("example-shop"), assignee: ["none"] }, cx);
-await settle(6);
+await settle();
 check("the Unassigned filter leaves the unassigned", v.board.tickets.length > 0 && v.board.tickets.every((k) => k.assigneeId == null), v.board.tickets.map((k) => k.id));
 check("a filter click keeps the project's values (no new requests)", v.board.meta === meta);
 
