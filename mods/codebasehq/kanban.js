@@ -30,9 +30,9 @@ function change(v, k, kind, option, cx) {
 /**
  * { statuses: [{id, name, colour, closed}] (open ones in order, then the closed ones), meta, tickets }. Every open ticket; of the closed ones (there can be thousands)
  * only the most recently updated, so Completed and the like show what was just done and can
- * take a card.
+ * take a card. known: the project's choices() when the caller has them.
  */
-export async function fetchBoard(creds, project, filter = NO_FILTER) {
+export async function fetchBoard(creds, project, filter = NO_FILTER, known = null) {
   const pages = async (search, max) => {
     const all = [];
     for (let page = 1; page <= max; page++) {
@@ -46,7 +46,7 @@ export async function fetchBoard(creds, project, filter = NO_FILTER) {
   const search = searchOf(filter, false);
   const wantOpen = filter.resolution !== "closed", wantClosed = filter.resolution !== "open";
   const [meta, open, closed] = await Promise.all([
-    choices(creds, project),
+    known ?? choices(creds, project),
     wantOpen ? pages(`${search} resolution:open`.trim(), PAGES) : [],
     wantClosed ? pages(`${search} resolution:closed`.trim(), RECENT_CLOSED) : [],
   ]);

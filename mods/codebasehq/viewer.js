@@ -23,6 +23,7 @@ import { OPEN, BOARD } from "./panes.js";
 
 const CHECK = 300;        // look at what to show (no request unless it changed)
 const REFRESH = 60000;    // new notes
+const META_AGE = 60000;   // the board asks for the project's values again after this
 
 // What a note's "updates" names its fields.
 const UPDATE_NAMES = {
@@ -189,8 +190,9 @@ export class Viewer {
     this.ticket = null;
     this.notes = null;
     this.users = null;          // { byId, byUsername } -> name, for the whole account
-    this.commits = new Map();   // note id -> the commit it came from (see noteCommits)
-    this.checked = new Set();   // note ids already looked up (matched or not)
+    this.commits = new Map();   // the shown ticket's: note id -> the commit it came from (see noteCommits)
+    this.checked = new Set();   // the shown ticket's note ids already looked up (matched or not)
+    this.commitsOf = new Map(); // "<project>-<id>" -> { commits, checked }: kept, so going back looks up nothing
     this.diffs = new Map();     // commit ref -> { open, loading, rows (diffRows), error, limit } for the opened commits
     this.clones = new Map();    // clone url -> local folder (or null: none here)
     this.images = new Map();    // upload id -> { open, loading, path, width, height, error }
@@ -264,8 +266,9 @@ export class Viewer {
     this.ref = w;
     this.ticket = null;
     this.notes = null;
-    this.commits = new Map();
-    this.checked = new Set();
+    // The commits found for this ticket before, if it was shown before.
+    if (w && w.view !== "kanban" && !this.commitsOf.has(key)) this.commitsOf.set(key, { commits: new Map(), checked: new Set() });
+    ({ commits: this.commits, checked: this.checked } = this.commitsOf.get(key) ?? { commits: new Map(), checked: new Set() });
     // Going back to the same board shows it at once and refreshes it.
     if (this.board?.project !== w?.project || w?.view !== "kanban") this.board = null;
     this.error = this.creds ? null : this.error;
@@ -483,34 +486,41 @@ export class Viewer {
 
   async loadBoard(ref, users, cx) {
     try {
+      // The project's statuses, people and so on change rarely: a filter click within a minute
+      // uses the ones the board has.
+      const old = this.board?.project === ref.project && Date.now() - (this.board.metaAt ?? 0) < META_AGE ? this.board : null;
       const [board] = await Promise.all([
-        fetchBoard(this.creds, ref.project, this.boardFilter(ref.project)),
+        fetchBoard(this.creds, ref.project, this.boardFilter(ref.project), old?.meta),
         users.then((u) => { this.users = u; }),
       ]);
       if (this.ref !== ref) return;
-      this.board = { project: ref.project, ...board, error: null };
+      this.board = { project: ref.project, ...board, metaAt: old?.metaAt ?? Date.now(), error: null };
       wantPictures(this, board.tickets.map((k) => k.assigneeId), cx);
     } catch (e) {
       if (this.ref === ref) this.board = { project: ref.project, ...(this.board ?? {}), error: errText(e) };
     }
   }
 
-  /** Which notes came from commits: looked up after the notes show, as it takes a few requests. */
+  /**
+   * Which notes came from commits: looked up after the notes show, as it takes a few requests,
+   * and kept per ticket. One lookup at a time; when it is done, the ticket shown by then is
+   * looked up if it has notes that weren't.
+   */
   findCommits(ref, notes, cx) {
+    const mine = this.commitsOf.get(`${ref.project}-${ref.id}`);
     // Only notes not looked up yet (new ones since the last refresh).
-    const fresh = notes.filter((n) => !this.checked.has(n.id));
+    const fresh = mine ? notes.filter((n) => !mine.checked.has(n.id)) : [];
     if (this.looking || !fresh.length) return;
     this.looking = true;
     cx.spawn(async (cx) => {
       try {
         const found = await noteCommits(this.creds, ref.project, ref.id, fresh);
-        if (this.ref === ref) {
-          for (const [id, c] of found) this.commits.set(id, c);
-          wantPictures(this, [...found.values()].map((c) => this.users?.idByName?.get((c.author ?? "").toLowerCase())), cx);
-          for (const n of fresh) this.checked.add(n.id);
-        }
-      } catch { /* the notes still show as notes */ }
+        for (const [id, c] of found) mine.commits.set(id, c);
+        for (const n of fresh) mine.checked.add(n.id);
+        wantPictures(this, [...found.values()].map((c) => this.users?.idByName?.get((c.author ?? "").toLowerCase())), cx);
+      } catch { /* the notes still show as notes; looked up again with the next refresh */ }
       this.looking = false;
+      if (this.ref !== ref && this.ref?.view !== "kanban" && this.notes) this.findCommits(this.ref, this.notes, cx);
       cx.notify();
     });
   }
