@@ -1,0 +1,10 @@
+gpui-kit.d.ts
+jsconfig.json
+.DS_Store
+
+# Never commit credentials (the mod keeps them in the macOS keychain)
+.env
+.env.*
+*.key
+credentials*.json
+secrets*.json
