@@ -5,11 +5,9 @@
 import { div } from "gpui-kit";
 import { v_flex, h_flex, Input } from "gpui-base";
 import { panes, spaces, notify } from "herdr";
-import { repoOf, branchName, validBranch, startBranch, updateTicket, usernameOf, currentBranch, isTicketBranch } from "./codebase.js";
+import { repoOf, branchName, validBranch, startBranch, updateTicket, usernameOf, currentBranch, isTicketBranch, isStartedStatus } from "./codebase.js";
 import { errText, setField, announceChange, textButton } from "./ui.js";
 
-// A status that means work has started, by its name.
-const IN_PROGRESS = /in progress|ongoing|started|doing|pågår|pågående|påbörja|under arbete/i;
 
 /**
  * Keeps v.checkouts: the shown space's checkouts of the shown ticket's project, from its
@@ -50,7 +48,7 @@ export function watchCheckouts(v, cx) {
 /** What starting will change on the ticket: { changes (for the API), lines (for the form), picked (kind -> option) }. */
 function plan(v) {
   const k = v.ticket, meta = v.metas.get(v.ref.project);
-  const progress = meta?.statuses?.find((s) => !s.closed && IN_PROGRESS.test(s.name));
+  const progress = meta?.statuses?.find((s) => !s.closed && isStartedStatus(s.name));
   const me = meta?.users?.find((u) => u.username && u.username === usernameOf(v.creds));
   const out = { changes: {}, lines: [], picked: {} };
   if (progress && k.statusId !== progress.id) {

@@ -55,3 +55,12 @@ list.filterMenu = null;
 // A notification's click: "open:<project>:<id>" comes as a command and shows the ticket.
 sendCommand("open:example-shop:117"); await settle();
 check("a note notification's click shows the ticket", world.shared["codebasehq.open"]?.uid === "example-shop-117", world.shared["codebasehq.open"]);
+
+// The list puts the most urgent first, the most recently updated first within a priority.
+list.choose(null, cx); await settle(6);
+const shown = list.ordered(list.entryFor("example-shop")).map((x) => `${x.priority}#${x.id}`);
+// (#118 became Critical above.)
+check("the most urgent priority first; within one, started, other open, then new", shown.join(" ") === "Critical#118 High#117 Normal#112 Normal#121 Low#115 Low#109", shown.join(" "));
+list.filters["example-shop"] = { ...list.filterFor("example-shop"), assignee: [], resolution: "all" }; list.load(cx, true); await settle(6);
+const all = list.ordered(list.entryFor("example-shop")).filter((x) => x.priority === "Normal").map((x) => `${x.status}#${x.id}`);
+check("… closed ones last (Open and closed)", all.join(" ") === "Accepted#116 Review#114 Accepted#112 New#122 New#121 New#119 Invalid#110 Completed#108", all.join(" "));

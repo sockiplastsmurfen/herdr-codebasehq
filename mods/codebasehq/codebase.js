@@ -115,11 +115,13 @@ function parseTicket(row) {
 const PAGE_SIZE = 20;
 
 /**
- * One page (20) of tickets matching a Codebase search (e.g. "assignee:me resolution:open"),
- * most recently updated first. more: whether there may be another page.
+ * One page (20) of tickets matching a Codebase search (e.g. "assignee:me resolution:open"):
+ * most recently updated first, or (order "priority") the most urgent first, so that each page
+ * carries on where the last ended. more: whether there may be another page.
  */
-export async function ticketPage(creds, project, search, page) {
-  const query = encodeURIComponent(`${search} sort:updated_at order:desc`.trim());
+export async function ticketPage(creds, project, search, page, order = "updated") {
+  const sort = order === "priority" ? "sort:priority order:desc" : "sort:updated_at order:desc";
+  const query = encodeURIComponent(`${search} ${sort}`.trim());
   const data = await get(creds, `/${encodeURIComponent(project)}/tickets?query=${query}&page=${page}`);
   if (!Array.isArray(data) || data.length === 0) return { tickets: [], more: false };
   return { tickets: data.map(parseTicket), more: data.length >= PAGE_SIZE };
@@ -151,7 +153,7 @@ export async function choices(creds, project) {
     statuses: rows(st, "ticketing_status").sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
       .map((x) => ({ id: x.id, name: x.name, colour: x.colour, closed: Boolean(x.treat_as_closed ?? x["treat-as-closed"]) })),
     priorities: rows(pr, "ticketing_priority").sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
-      .map((x) => ({ id: x.id, name: x.name, colour: x.colour, isDefault: Boolean(x.default) })),
+      .map((x) => ({ id: x.id, name: x.name, colour: x.colour, isDefault: Boolean(x.default), position: x.position ?? null })),
     types: rows(ty, "ticketing_type").map((x) => ({ id: x.id, name: x.name, icon: x.icon ?? null })),
     categories: rows(ca, "ticketing_category").map((x) => ({ id: x.id, name: x.name })).sort(byName),
     users: [{ id: null, name: "Unassigned" }, ...rows(us, "user")
@@ -476,6 +478,9 @@ export async function currentBranch(folder) {
   const r = await exec("git", ["symbolic-ref", "--quiet", "--short", "HEAD"], { cwd: folder, timeout: 10000 }).catch(() => null);
   return r?.code === 0 ? r.stdout.trim() || null : null;
 }
+
+/** Whether a status's name says work on the ticket has started ("In Progress", "Pågående"…). */
+export const isStartedStatus = (name) => /in progress|ongoing|started|doing|pågår|pågående|påbörja|under arbete/i.test(name ?? "");
 
 /** Whether a branch is a ticket's: "583", "583-…" or "ticket-583", as noteCommits looks for them. */
 export const isTicketBranch = (branch, id) => new RegExp(`^(ticket-)?${Number(id)}(-|$)`).test(branch ?? "");

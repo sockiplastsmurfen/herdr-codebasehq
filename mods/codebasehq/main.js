@@ -16,7 +16,7 @@ import { focused, spaces, panes, theme, checking, props, notify, run, shared, se
 import {
   loadCredentials, saveCredentials, forgetCredentials, accountOf, usernameOf,
   ticketPage, projects, repoOf, ticketUrl, ticketsUrl, ago, ApiError, defaultBase, normalizeBase, choices,
-  accountUsers, createTicket, findProjectCheckout, repositories, cloneRepository, expandHome, ticketNotes,
+  accountUsers, createTicket, findProjectCheckout, repositories, cloneRepository, expandHome, ticketNotes, isStartedStatus,
 } from "./codebase.js";
 import {
   TITLES, FIELDS, personBadge, wantPictures, CHANGED, copyId, announceChange,
@@ -49,6 +49,19 @@ function listPath(node = layout(), trail = []) {
 }
 const layoutNode = (id, node = layout()) =>
   node?.id === id ? node : (node?.children ?? []).map((c) => layoutNode(id, c)).find(Boolean) ?? null;
+
+/**
+ * A priority's place by its name, for when the project's own order isn't in yet: urgent and
+ * the like first, then high, prioritized, normal, low. The project's positions start at 1 too.
+ */
+function priorityRank(name) {
+  const n = (name ?? "").toLowerCase();
+  if (/urgent|critical|blocker|akut|kritisk/.test(n)) return 1;
+  if (/high|hög/.test(n)) return 2;
+  if (/priorit/.test(n)) return 3;
+  if (/low|låg/.test(n)) return 5;
+  return 4;
+}
 
 /** Where a space's own project is kept among the chosen ones. */
 const spaceKey = (id) => (id ? `space:${id}` : null);
@@ -242,6 +255,32 @@ export default class Tickets extends View {
     if (now) apply(cx); else cx.timer.after(SEARCH_DELAY, apply);
   }
 
+  /**
+   * A list's tickets as it shows them: the most urgent priority first (the project's own order
+   * of its priorities, by position; else by the name); within one, those being worked on, then
+   * the other open ones, then new ones, then closed ones; then the most recently updated first.
+   * Worked out again only when the list or a project's values change (render runs often).
+   */
+  ordered(entry) {
+    if (!entry.tickets) return null;
+    if (entry.ordered?.from === entry.tickets && entry.ordered.version === this.metaVersion) return entry.ordered.list;
+    const priority = (k) => {
+      const p = this.meta.get(k.project)?.priorities?.find((x) => x.id === k.priorityId);
+      return p?.position ?? priorityRank(k.priority);
+    };
+    const status = (k) => {
+      if (k.closed) return 3;
+      if (isStartedStatus(k.status)) return 0;
+      // New: the project's first open status (or one named so, until the statuses are in).
+      const first = this.meta.get(k.project)?.statuses?.find((s) => !s.closed);
+      return (first ? first.id === k.statusId : /^(new|ny|nytt|nya)$/i.test(k.status ?? "")) ? 2 : 1;
+    };
+    const list = entry.tickets.map((k) => ({ k, p: priority(k), s: status(k) }))
+      .sort((a, b) => a.p - b.p || a.s - b.s || b.k.updated - a.k.updated).map((x) => x.k);
+    entry.ordered = { from: entry.tickets, version: this.metaVersion, list };
+    return list;
+  }
+
   /** Tickets are cached per project and search. */
   entryFor(project) {
     const key = `${project}\n${this.searchFor(project)}`;
@@ -276,7 +315,7 @@ export default class Tickets extends View {
       let page = first, hasMore = true;
       try {
         for (; page <= last && hasMore; page++) {
-          const r = await ticketPage(this.creds, p.permalink, search, page);
+          const r = await ticketPage(this.creds, p.permalink, search, page, "priority");
           // A ticket updated while paging can come twice.
           const add = r.tickets.map((k) => tag(k, p.permalink)).filter((k) => !seen.has(k.uid));
           for (const k of add) seen.add(k.uid);
@@ -327,7 +366,7 @@ export default class Tickets extends View {
         const worker = async () => {
           for (let project = queue.shift(); project; project = queue.shift()) {
             try {
-              const r = await ticketPage(this.creds, project, search, next.get(project));
+              const r = await ticketPage(this.creds, project, search, next.get(project), "priority");
               list = list.concat(r.tickets.map((k) => tag(k, project, names.get(project))));
               if (r.more) next.set(project, next.get(project) + 1); else next.delete(project);
             } catch (e) {
@@ -930,7 +969,7 @@ export default class Tickets extends View {
   renderList(t) {
     const p = this.project();
     const entry = this.entryFor(p.permalink);
-    const tickets = entry.tickets;
+    const tickets = this.ordered(entry);
     const resolution = this.filterFor(p.permalink).resolution;
     // The project's name is on the line under the header.
     const subtitle = tickets ? `${tickets.length}${entry.more ? "+" : ""}${resolution === "all" ? "" : ` ${resolution}`}` : "";

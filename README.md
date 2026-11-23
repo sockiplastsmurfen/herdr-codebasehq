@@ -21,7 +21,9 @@ A [Herdr](https://herdr.dev) mod for [Codebase HQ](https://www.codebasehq.com) t
   Tickets panel shows in that space. It refreshes by
   itself every 10 minutes instead of every 2.
 - **The project's name** is under the header; the arrow icon after it opens its tickets in Codebase.
-- **One card per ticket**, most recently updated first: number, summary and one
+- **One card per ticket**, the most urgent priority first (the project's own order of its
+  priorities); within a priority those being worked on first, then the other open ones, then new
+  ones, then closed ones; then the most recently updated first: number, summary and one
   row of details: status (name and colour), icons for priority (a flag in its colour) and
   type (Codebase's own icon; hover for the name), category with a tag, and the assignee.
   Age is on the right. The **copy icon** copies `#<id> <title>`, the **arrow icon** shows

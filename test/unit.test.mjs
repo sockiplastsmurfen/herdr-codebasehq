@@ -16,3 +16,13 @@ check("~ is the home folder", expandHome("~/Sites/") === "/Users/demo/Sites" && 
 check("the filter becomes Codebase's search", searchOf({ ...NO_FILTER, assignee: ["me"], status: ["In Progress", "New"], resolution: "open" }) === 'assignee:me status:"In Progress",New resolution:open');
 check("Unassigned is a term of its own, ORed with the others", searchOf({ ...NO_FILTER, assignee: [UNASSIGNED, "me"] }) === "assignee:none assignee:me");
 check("no resolution term when asked not to", searchOf({ ...NO_FILTER, resolution: "open" }, false) === "");
+import { world } from "./fake/herdr.mjs";
+import { ticketPage } from "../mods/codebasehq/codebase.js";
+// The list asks Codebase for the most urgent first, so its next pages carry on in that order.
+world.exec = () => undefined;
+const asked = [];
+globalThis.fetch = async (url) => { asked.push(decodeURIComponent(String(url))); return { ok: true, status: 200, json: async () => [], text: async () => "[]" }; };
+await ticketPage({ user: "a/b", key: "k" }, "shop", "assignee:me", 1, "priority").catch(() => {});
+await ticketPage({ user: "a/b", key: "k" }, "shop", "assignee:me", 1).catch(() => {});
+check("the list's pages come most urgent first", asked[0]?.includes("assignee:me sort:priority order:desc"), asked[0]);
+check("… others' most recently updated first", asked[1]?.includes("assignee:me sort:updated_at order:desc"), asked[1]);
