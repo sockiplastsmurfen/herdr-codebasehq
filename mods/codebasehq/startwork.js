@@ -77,8 +77,12 @@ export function toggleStartWork(v, cx) {
  * Whether Start work can show: the shown space has a checkout of the ticket's project, and none
  * of them is on the ticket's branch already.
  */
-export const canStartWork = (v) => Boolean(v.checkouts?.length)
-  && !v.checkouts.some((root) => isTicketBranch(v.checkoutBranches?.get(root), v.ref?.id));
+export function canStartWork(v) {
+  if (!v.checkouts?.length || v.checkouts.some((root) => isTicketBranch(v.checkoutBranches?.get(root), v.ref?.id))) return false;
+  // Gone once Start is clicked: while it runs, and after, while that checkout stays on the branch.
+  const started = v.started?.get(v.key);
+  return !started || (!started.busy && v.checkoutBranches?.get(started.folder) !== started.branch);
+}
 
 /** Start: checks the form, then does the work in a task of its own (the click's cx is only good during the click). */
 function start(v, cx) {
@@ -88,10 +92,15 @@ function start(v, cx) {
   if (!s.folder) { s.error = "Pick a checkout first."; cx.notify(); return; }
   if (!validBranch(name)) { s.error = "Not a branch name git takes."; cx.notify(); return; }
   s.busy = true; s.error = null;
+  const started = { folder: s.folder, branch: name, busy: true };
+  (v.started ??= new Map()).set(v.key, started);
   cx.notify();
   cx.spawn(async (cx) => {
     try {
       const r = await startBranch(s.folder, name);
+      started.busy = false;
+      // On the branch now; watchCheckouts sees it too once the terminal's branch changes.
+      v.checkoutBranches?.set(s.folder, name);
       const p = plan(v);
       if (Object.keys(p.changes).length) {
         await updateTicket(v.creds, ref.project, ref.id, p.changes);
@@ -104,6 +113,8 @@ function start(v, cx) {
       if (v.start === s) v.start = null;
     } catch (e) {
       s.error = errText(e);
+      // Not on the branch after all (or only the ticket change failed): the icon is back if so.
+      started.busy = false;
     }
     s.busy = false;
     cx.notify();
