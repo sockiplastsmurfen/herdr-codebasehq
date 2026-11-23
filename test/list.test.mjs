@@ -64,3 +64,13 @@ check("the most urgent priority first; within one, started, other open, then new
 list.filters["example-shop"] = { ...list.filterFor("example-shop"), assignee: [], resolution: "all" }; list.load(cx, true); await settle(6);
 const all = list.ordered(list.entryFor("example-shop")).filter((x) => x.priority === "Normal").map((x) => `${x.status}#${x.id}`);
 check("… closed ones last (Open and closed)", all.join(" ") === "Accepted#116 Review#114 Accepted#112 New#122 New#121 New#119 Invalid#110 Completed#108", all.join(" "));
+
+// In All projects, a change made in another copy asks only that project again.
+{
+  list.choose("*", cx); await settle(8);
+  world.asked.length = 0;
+  world.shared["codebasehq.changed"] = { from: "another-copy", project: "example-shop", id: 121, ids: [121], at: Date.now() };
+  list.followChanges(cx); await settle(4);
+  check("a change elsewhere in All projects asks only its project again", world.asked.join() === "example-shop", world.asked);
+  list.choose(null, cx); await settle(6);
+}

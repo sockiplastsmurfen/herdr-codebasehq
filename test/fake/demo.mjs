@@ -3,6 +3,11 @@
 // What the mod saves (changes, notes, new tickets) is kept in world.saved for the tests to see.
 import { world } from "./herdr.mjs";
 world.saved = [];
+// For the tests: tickets "changed elsewhere" (id -> updated), the projects pages were asked for,
+// and how many projects' values were being asked for at once (the most at a time).
+world.touched = {};
+world.asked = [];
+world.choices = { now: 0, most: 0, calls: 0 };
 const now = Date.now();
 const min = (m) => now - m * 60000;
 
@@ -96,6 +101,10 @@ export async function projects() {
 }
 
 export async function choices() {
+  world.choices.calls++;
+  world.choices.most = Math.max(world.choices.most, ++world.choices.now);
+  await new Promise((r) => setTimeout(r, 5));
+  world.choices.now--;
   return {
     statuses: STATUSES.map((x) => ({ ...x })),
     priorities: PRIORITIES.map((x) => ({ ...x })),
@@ -114,6 +123,7 @@ export async function choices() {
  * assignee:me), different keys AND, id:N is that ticket, other words are free text.
  */
 export async function ticketPage(_creds, project, search, page) {
+  world.asked.push(project);
   if (project !== "example-shop") return { tickets: [], more: false };
   const terms = {};
   const TERM = /(\w+):((?:"[^"]*"|[^\s,]+)(?:,(?:"[^"]*"|[^\s,]+))*)/g;
@@ -130,7 +140,7 @@ export async function ticketPage(_creds, project, search, page) {
     && (!terms.resolution || terms.resolution[0] === (k.closed ? "closed" : "open"))
     && words.every((w) => k.summary.toLowerCase().includes(w)))
     .sort((a, b) => b.updated - a.updated)
-    .map(({ reporter, reporterId, created, tags, milestone, milestoneId, ...k }) => ({ ...k }));
+    .map(({ reporter, reporterId, created, tags, milestone, milestoneId, ...k }) => ({ ...k, updated: world.touched[k.id] ?? k.updated }));
   const slice = list.slice((page - 1) * 20, page * 20);
   return { tickets: slice, more: list.length > page * 20 };
 }

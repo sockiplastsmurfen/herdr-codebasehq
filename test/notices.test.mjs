@@ -24,3 +24,32 @@ list.forgetAccount();
 const quiet = world.notifications.length;
 await list.noteNotices("example-shop", [k], Date.now() - 1300 * 60000);
 check("no notifications until you are known", list.myId() === null && world.notifications.length === quiet);
+
+// The 20-second look: a change made elsewhere is news (announced, list reloaded); one this mod
+// made or heard of within the minute isn't.
+{
+  const fresh = new Tickets(); const cx2 = makeCx();
+  fresh.init(undefined, cx2); await settle(8);
+  fresh.notice(cx2); await settle(4);                       // the first look: what is there
+  const announcedBefore = world.shared["codebasehq.changed"]?.at ?? 0;
+  world.touched[117] = Date.now();                          // changed elsewhere
+  fresh.notice(cx2); await settle(4);
+  const c = world.shared["codebasehq.changed"];
+  check("a change made elsewhere is announced to the other copies", c?.at > announcedBefore && c.ids?.includes(117), c);
+  world.shared["codebasehq.changed"] = { from: "another-copy", project: "example-shop", id: 112, ids: [112], at: Date.now() };
+  fresh.followChanges(cx2); await settle(4);
+  world.touched[112] = Date.now() + 1000;                   // the same change, seen by the look
+  const at = world.shared["codebasehq.changed"].at;
+  fresh.notice(cx2); await settle(4);
+  check("a change this mod already heard of isn't news", world.shared["codebasehq.changed"].at === at);
+}
+
+// All projects asks for the projects' values a few at a time.
+{
+  const queued = new Tickets(); const cx3 = makeCx();
+  queued.init(undefined, cx3); await settle(8);
+  world.choices = { now: 0, most: 0, calls: 0 };
+  for (let i = 1; i <= 6; i++) queued.loadChoices(`project-${i}`, cx3);
+  await settle(12);
+  check("six projects' values are asked for 3 at a time, all of them", world.choices.most === 3 && world.choices.calls === 6, world.choices);
+}

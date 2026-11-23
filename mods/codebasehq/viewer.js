@@ -12,7 +12,7 @@ import { props, shared, checking, settings, spaces, appHome, openOverlay, notify
 import {
   loadCredentials, accountOf, ticketDetail, ticketNotes, accountUsers, ticketUrl, defaultBase, ago,
   noteCommits, commitUrl, findClone, commitDiff, uploadId, downloadUpload, saveToDownloads, canShow, postNote, choices,
-  chooseFiles, uploadFile, updateTicket,
+  chooseFiles, uploadFile, updateTicket, imageName,
 } from "./codebase.js";
 import {
   TITLES, FIELDS, personColour, personBadge, wantPictures, CHANGED, copyId, announceChange, changeIsAbout, errText, openLink,
@@ -144,7 +144,8 @@ function prepareNote(n, base) {
   if (n.prep?.base === base) return n.prep;
   const named = new Map(n.attachments.map((a) => [a.id, a.name]));
   const content = blocks(n.content, base).filter((b) => b.image || b.lines || b.markdown.trim()).map((b) =>
-    b.image ? { image: { ...b.image, name: named.get(b.image.id) ?? b.image.name } }
+    // An image's name has an extension, so the note, the dialog and Download share one download.
+    b.image ? { image: { ...b.image, name: imageName(named.get(b.image.id) ?? b.image.name) } }
     : b.lines ? { rich: richLines(b.lines) }
     : { markdown: b.markdown.trim() });
   return (n.prep = {
@@ -175,7 +176,7 @@ function diffRows(text) {
 function imagesBelow(n) {
   const inText = new Set([...(n.content ?? "").matchAll(/!\[[^\]]*\]\(([^)\s]+)\)/g)].map((m) => uploadId(m[1])).filter(Boolean));
   return (n.attachments ?? []).filter((a) => a.id && /^image\//.test(a.type) && !inText.has(a.id))
-    .map((a) => ({ id: a.id, name: a.name, url: a.url }));
+    .map((a) => ({ id: a.id, name: imageName(a.name), url: a.url }));
 }
 
 /** Nobody, when the account's people can't be read: notes still show, with "User <id>". */
@@ -749,8 +750,7 @@ export class Viewer {
 
   /**
    * Shows an attachment, or an image clicked in a note, in a Herdr dialog (fileview.js): its
-   * pages or the picture, Download, Quick Look. An image named without an extension gets ".png"
-   * (the dialog goes by the extension; the picture is read by its content).
+   * pages or the picture, Download, Quick Look. (An image's name has an extension: imageName.)
    */
   openFile(a, base) {
     const url = a.url?.startsWith("/") ? base + a.url : a.url;
@@ -813,7 +813,7 @@ export class Viewer {
         d.loading ? div().py(4).text_size(12).text_color(t.dim).child("Loading the image…")
         : d.error ? div().py(4).text_size(12).text_color(t.ansi1).child(d.error)
         : div().id(`img-show-${n.id}-${img.id}`).cursor_pointer().tooltip("Show it larger")
-          .on_click(() => this.openFile({ ...img, name: /\.\w+$/.test(img.name ?? "") ? img.name : `${img.name || "image"}.png` }, base))
+          .on_click(() => this.openFile(img, base))
           .child(w && h ? image(d.path).w(w).h(h).rounded(4) : image(d.path).w_full().h(240))));
   }
 

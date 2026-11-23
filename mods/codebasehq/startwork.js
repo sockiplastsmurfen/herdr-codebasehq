@@ -31,8 +31,9 @@ export function watchCheckouts(v, cx) {
   cx.spawn(async (cx) => {
     const roots = [];
     for (const folder of folders) {
-      if (!v.repos.has(folder)) v.repos.set(folder, await repoOf(folder).catch(() => null));
-      const repo = v.repos.get(folder);
+      // The lookup itself is kept: two asking at once share one git run.
+      if (!v.repos.has(folder)) v.repos.set(folder, repoOf(folder).catch(() => null));
+      const repo = await v.repos.get(folder);
       if (repo?.remote?.project === project && !roots.includes(repo.root)) roots.push(repo.root);
     }
     const on = new Map();

@@ -294,19 +294,45 @@ function plainMessage(text) {
 }
 
 /** [{ permalink, name, defaultBranch }] */
-export async function repositories(creds, project) {
+// Answers kept for a while (key -> { at, value: a promise }): the commit lookup asks the same
+// repositories, branches and commit pages for every ticket of a project. A failure isn't kept.
+const remembered = new Map();
+function remember(key, ms, ask) {
+  const r = remembered.get(key);
+  if (r && Date.now() - r.at < ms) return r.value;
+  const value = ask().catch((e) => { remembered.delete(key); throw e; });
+  remembered.set(key, { at: Date.now(), value });
+  return value;
+}
+/** Drops the kept answers (another account, or a manual reload). */
+export const forgetRemembered = () => remembered.clear();
+const MINUTES = 60000;
+
+export function repositories(creds, project) {
+  return remember(`${creds.user}|repos|${project}`, 5 * MINUTES, () => repositoriesNow(creds, project));
+}
+
+async function repositoriesNow(creds, project) {
   const data = (await get(creds, `/${encodeURIComponent(project)}/repositories`)) ?? [];
   return data.map((r) => r.repository ?? r).filter((r) => (r.scm ?? "git") === "git")
     .map((r) => ({ permalink: r.permalink, name: r.name ?? r.permalink, defaultBranch: r.default_branch ?? "master", cloneUrl: r.clone_url ?? null }));
 }
 
-async function branches(creds, project, repo) {
-  const data = (await get(creds, `/${encodeURIComponent(project)}/${encodeURIComponent(repo)}/branches`)) ?? [];
-  return data.map((b) => (b.branch ?? b).name).filter(Boolean);
+function branches(creds, project, repo) {
+  return remember(`${creds.user}|branches|${project}/${repo}`, 5 * MINUTES, async () => {
+    const data = (await get(creds, `/${encodeURIComponent(project)}/${encodeURIComponent(repo)}/branches`)) ?? [];
+    return data.map((b) => (b.branch ?? b).name).filter(Boolean);
+  });
 }
 
 /** One page (20) of a branch's commits, newest first: [{ ref, short, message, author, at }] */
-async function commitsPage(creds, project, repo, branch, page) {
+function commitsPage(creds, project, repo, branch, page) {
+  // The first page changes as commits come; the older ones hardly.
+  return remember(`${creds.user}|commits|${project}/${repo}/${branch}/${page}`, (page === 1 ? 1 : 10) * MINUTES,
+    () => commitsPageNow(creds, project, repo, branch, page));
+}
+
+async function commitsPageNow(creds, project, repo, branch, page) {
   const data = await get(creds, `/${encodeURIComponent(project)}/${encodeURIComponent(repo)}/commits/${encodeURIComponent(branch)}?page=${page}`);
   if (!Array.isArray(data)) return [];
   return data.map((c) => c.commit ?? c).map((c) => ({
@@ -568,14 +594,18 @@ async function fetchUpload(creds, id, file, then = "", timeout = 60000) {
   ].join("\n"), "sh", creds.user, file, `${API}/uploads/${id}`, SERVICE], { timeout });
 }
 
+/** An image's name with an extension (".png" when it has none): the dialog and Download go by it. */
+export const imageName = (name) => (/\.\w+$/.test(name ?? "") ? name : `${name || "image"}.png`);
+
 /**
- * Downloads an image upload once into <appHome>/data/codebasehq-images/ and reads its size.
+ * Downloads an image upload once and reads its size. It goes where the attachment would
+ * (attachmentPath), so the note, the dialog and Download share one copy.
  * Returns { path (relative to appHome, for image()), width, height }.
  */
 export async function downloadUpload(creds, appHome, id, name) {
-  const ext = (/\.(png|jpe?g|gif|webp|svg)$/i.exec(name ?? "")?.[1] ?? "png").toLowerCase();
-  const rel = `data/codebasehq-images/${id}.${ext}`;
-  const r = await fetchUpload(creds, id, `${appHome}/${rel}`,
+  const at = attachmentPath(appHome, id, imageName(name));
+  const rel = `${at.rel}/${at.file.split("/").pop()}`;
+  const r = await fetchUpload(creds, id, at.file,
     'sips -g pixelWidth -g pixelHeight "$2" 2>/dev/null | awk \'/pixel(Width|Height)/ { print $2 }\'');
   if (r.code !== 0) throw new Error((r.stderr || "").trim() || "The image could not be downloaded.");
   const [width, height] = r.stdout.trim().split("\n").map(Number);
@@ -680,13 +710,19 @@ export async function attachmentView(creds, appHome, id, name) {
   if (TEXT_TYPES.test(at.ext)) return { kind: "text", text: (await readTextFile(at.file)) ?? "", count: 1 };
   if (at.ext === "pdf" || DOCUMENT_TYPES.test(at.ext)) {
     let pdf = at.file;
+    // Laid out and drawn once: an upload never changes. "sizes" is written last, when all is there.
     if (at.ext !== "pdf") {
       pdf = `${at.dir}/layout.pdf`;
-      const r = await exec("osascript", ["-l", "JavaScript", "-e", TEXT_TO_PDF, at.file, pdf], { timeout: 120000 });
+      const r = await exec("/bin/sh", ["-c", '[ -s "$3" ] || exec osascript -l JavaScript -e "$1" "$2" "$3"', "sh", TEXT_TO_PDF, at.file, pdf], { timeout: 120000 });
       if (r.code !== 0) throw new Error((r.stderr || "").trim() || "The document could not be laid out.");
     }
-    const r = await exec("/bin/sh", ["-c", 'rm -rf "$2" && mkdir -p "$2" && exec osascript -l JavaScript -e "$1" "$3" "$2" "$4" "$5"',
-      "sh", PDF_PAGES, `${at.dir}/pages`, pdf, String(MAX_PAGES), String(PAGE_WIDTH)], { timeout: 300000 });
+    const r = await exec("/bin/sh", ["-c", [
+      'set -e',
+      'if [ -s "$2/sizes" ]; then cat "$2/sizes"; exit 0; fi',
+      'rm -rf "$2" && mkdir -p "$2"',
+      'osascript -l JavaScript -e "$1" "$3" "$2" "$4" "$5" > "$2/sizes.part"',
+      'mv "$2/sizes.part" "$2/sizes" && cat "$2/sizes"',
+    ].join("\n"), "sh", PDF_PAGES, `${at.dir}/pages`, pdf, String(MAX_PAGES), String(PAGE_WIDTH)], { timeout: 300000 });
     if (r.code !== 0) throw new Error((r.stderr || "").trim() || "The pages could not be drawn.");
     const [count, ...sizes] = r.stdout.trim().split("\n");
     return { kind: "pages", count: Number(count) || sizes.length, pages: sizes.map((s, i) => {
@@ -695,7 +731,7 @@ export async function attachmentView(creds, appHome, id, name) {
     }) };
   }
   // Anything else: Quick Look's picture of its first page (it names it <file name>.png).
-  const r = await exec("/bin/sh", ["-c", 'mkdir -p "$1" && qlmanage -t -s "$3" -o "$1" "$2" >/dev/null 2>&1; test -s "$1/$(basename "$2").png"',
+  const r = await exec("/bin/sh", ["-c", 'mkdir -p "$1"; [ -s "$1/$(basename "$2").png" ] || qlmanage -t -s "$3" -o "$1" "$2" >/dev/null 2>&1; test -s "$1/$(basename "$2").png"',
     "sh", `${at.dir}/first`, at.file, String(PAGE_WIDTH)], { timeout: 60000 });
   if (r.code !== 0) return { kind: "none", count: 0 };
   return { kind: "first", count: 1, pages: [await size(`${at.rel}/first/${at.file.split("/").pop()}.png`)] };

@@ -1,7 +1,7 @@
 // The attachment dialog's pages, made for real with macOS's tools (PDFKit, the text system,
 // Quick Look), and Download. Skipped elsewhere than macOS. All files are made for the test.
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, copyFileSync, existsSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, copyFileSync, existsSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { check } from "./lib.mjs";
 import { world } from "./fake/herdr.mjs";
@@ -23,6 +23,11 @@ try {
   let v = await attachmentView(creds, app, "00000000000000000001", "Long report å.docx");
   check("a Word document is laid out on pages", v.kind === "pages" && v.count > 1 && v.pages.length === v.count && existsSync(`${app}/${v.pages[0].path}`), v);
   check("… 1400px wide, A4-shaped", v.pages[0].width === 1400 && Math.abs(v.pages[0].height / v.pages[0].width - 842 / 595) < 0.02, v.pages[0]);
+
+  const drawn = statSync(`${app}/${v.pages[0].path}`).mtimeMs;
+  await new Promise((r) => setTimeout(r, 20));
+  const again = await attachmentView(creds, app, "00000000000000000001", "Long report å.docx");
+  check("opened again, the pages aren't drawn again", again.pages.length === v.pages.length && statSync(`${app}/${again.pages[0].path}`).mtimeMs === drawn);
 
   place("00000000000000000002", "Report.pdf", `${app}/data/codebasehq-files/00000000000000000001/layout.pdf`);
   v = await attachmentView(creds, app, "00000000000000000002", "Report.pdf");

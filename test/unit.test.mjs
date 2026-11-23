@@ -26,3 +26,14 @@ await ticketPage({ user: "a/b", key: "k" }, "shop", "assignee:me", 1, "priority"
 await ticketPage({ user: "a/b", key: "k" }, "shop", "assignee:me", 1).catch(() => {});
 check("the list's pages come most urgent first", asked[0]?.includes("assignee:me sort:priority order:desc"), asked[0]);
 check("… others' most recently updated first", asked[1]?.includes("assignee:me sort:updated_at order:desc"), asked[1]);
+// The commit lookup's answers are kept a while: asking twice asks Codebase once.
+{
+  const { repositories, forgetRemembered } = await import("../mods/codebasehq/codebase.js");
+  asked.length = 0;
+  await repositories({ user: "a/b", key: "k" }, "shop");
+  await repositories({ user: "a/b", key: "k" }, "shop");
+  check("repositories are asked for once in a while, not per ticket", asked.filter((u) => u.includes("/shop/repositories")).length === 1, asked);
+  forgetRemembered();
+  await repositories({ user: "a/b", key: "k" }, "shop");
+  check("… and again after a reload or another account", asked.filter((u) => u.includes("/shop/repositories")).length === 2);
+}

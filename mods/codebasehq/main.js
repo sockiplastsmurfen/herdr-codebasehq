@@ -16,7 +16,7 @@ import { focused, spaces, panes, theme, checking, props, notify, run, shared, se
 import {
   loadCredentials, saveCredentials, forgetCredentials, accountOf, usernameOf,
   ticketPage, projects, repoOf, ticketUrl, ticketsUrl, ago, ApiError, defaultBase, normalizeBase, choices,
-  accountUsers, createTicket, findProjectCheckout, repositories, cloneRepository, expandHome, ticketNotes, isStartedStatus,
+  accountUsers, createTicket, findProjectCheckout, repositories, cloneRepository, expandHome, ticketNotes, isStartedStatus, forgetRemembered,
 } from "./codebase.js";
 import {
   TITLES, FIELDS, personBadge, wantPictures, CHANGED, copyId, announceChange,
@@ -31,6 +31,8 @@ const WATCH = 1500;       // how often to look at which folder is focused (no ex
 const REFRESH = 120000;   // tickets
 const STALE = 60000;      // switching back to a project reloads it if older than this
 const BATCH = 3;          // pages (20 tickets each) loaded at a time; "Load more" gets the next ones
+const KNOWN = 60000;      // a change announced this long ago isn't news to notice()
+const CHOICES_AT_ONCE = 3; // projects whose values are asked for at a time (6 requests each)
 const SEARCH_DELAY = 400; // ms after the last key before the list searches
 const SHOWN = 60;         // cards drawn at a time: All projects can load hundreds, and drawing them all is slow
 const ALL = "*";          // the "project" that means every active project
@@ -87,6 +89,7 @@ export default class Tickets extends View {
     this.me = copyId();         // to know our own change announcements
     this.seenChange = shared(CHANGED)?.at ?? 0;
     this.newest = new Map();    // project -> the newest ticket update seen by notice()
+    this.announced = new Map(); // "<project>-<id>" -> when a change to it was announced (followChanges)
     this.folderRepos = new Map(); // "<machine>\n<folder>" -> repoOf() (null: not a git repo); see repoAt
     this.metaVersion = 0;       // counts finished loadChoices, so mergedChoices knows to merge again
     this.merged = null;         // mergedChoices' last answer
@@ -428,7 +431,8 @@ export default class Tickets extends View {
   /** repoOf(folder), asked once per folder (a manual reload asks again). */
   async repoAt(folder, machine) {
     const key = `${machine ?? ""}\n${folder}`;
-    if (!this.folderRepos.has(key)) this.folderRepos.set(key, await repoOf(folder, machine).catch(() => null));
+    // The lookup itself is kept: two asking at once share one git run.
+    if (!this.folderRepos.has(key)) this.folderRepos.set(key, repoOf(folder, machine).catch(() => null));
     return this.folderRepos.get(key);
   }
 
@@ -601,13 +605,36 @@ export default class Tickets extends View {
     const c = shared(CHANGED);
     if (!c?.at || c.at <= this.seenChange) return;
     this.seenChange = c.at;
+    // Known changes, this copy's too: notice() doesn't take them for changes made elsewhere.
+    for (const id of c.ids ?? [c.id]) this.announced.set(`${c.project}-${id}`, c.at);
     if (c.from === this.me) return;
+    // In All projects only that project is asked again (all of them would be one request each).
+    if (this.project().all) { this.refreshInAll(c.project, cx); return; }
     this.reloadAll(cx);
+  }
+
+  /**
+   * All projects, after a change in one: that project's first page is asked again and takes the
+   * place of its tickets in the list (its later pages come with Load more or the next refresh).
+   */
+  refreshInAll(project, cx) {
+    const entry = this.entryFor(ALL);
+    for (const e of this.cache.values()) if (e !== entry) e.at = 0;
+    if (!entry.tickets || !project) return;
+    const name = this.projectList?.find((x) => x.permalink === project)?.name ?? project;
+    cx.spawn(async (cx) => {
+      try {
+        const { tickets } = await ticketPage(this.creds, project, this.searchFor(ALL), 1, "priority");
+        entry.tickets = [...entry.tickets.filter((k) => k.project !== project), ...tickets.map((k) => tag(k, project, name))];
+      } catch { /* the next refresh brings it */ }
+      cx.notify();
+    });
   }
 
   /** The Reload button: the folder's repo and git remote are looked up again too, then the list. */
   reloadHere(cx) {
     this.folderRepos.clear();
+    forgetRemembered();
     if (this.cwd) {
       const cwd = this.cwd, machine = spaces().find((s) => s.id === focused()?.space)?.machine ?? undefined;
       cx.spawn(async (cx) => {
@@ -651,8 +678,11 @@ export default class Tickets extends View {
         const newest = Math.max(0, ...tickets.map((k) => k.updated));
         const before = this.newest.get(project);
         this.newest.set(project, Math.max(newest, before ?? 0));
-        if (before !== undefined && newest > before) {
-          const changed = tickets.filter((k) => k.updated > before);
+        // Changes this mod made, or heard of, in the last minute aren't news.
+        for (const [key, at] of this.announced) if (at < Date.now() - KNOWN) this.announced.delete(key);
+        const known = (k) => (this.announced.get(`${project}-${k.id}`) ?? 0) > Date.now() - KNOWN;
+        const changed = before === undefined ? [] : tickets.filter((k) => k.updated > before && !known(k));
+        if (changed.length) {
           announceChange(this.me, project, changed.map((k) => k.id));
           if (!p.all) this.reloadAll(cx);
           await this.noteNotices(project, changed, before);
@@ -715,19 +745,35 @@ export default class Tickets extends View {
     }
   }
 
+  /**
+   * A project's values (statuses, people…: choices(), six requests), once. Queued, a few projects
+   * at a time: All projects asks for every project in its list at once.
+   */
   loadChoices(project, cx) {
     const m = this.meta.get(project);
     if (m && (m.loading || m.statuses)) return;
-    const entry = { statuses: null, error: null, loading: true };
-    this.meta.set(project, entry);
-    cx.spawn(async (cx) => {
-      try { Object.assign(entry, await choices(this.creds, project)); }
-      catch (e) { entry.error = errText(e); }
-      entry.loading = false;
-      this.metaVersion++;
-      this.wantShownPictures(cx);
-      cx.notify();
-    });
+    this.meta.set(project, { statuses: null, error: null, loading: true });
+    (this.choicesQueue ??= []).push(project);
+    this.pumpChoices(cx);
+  }
+
+  pumpChoices(cx) {
+    this.choicesRunning ??= 0;
+    while (this.choicesRunning < CHOICES_AT_ONCE && this.choicesQueue.length) {
+      const project = this.choicesQueue.shift(), entry = this.meta.get(project);
+      if (!entry?.loading) continue;
+      this.choicesRunning++;
+      cx.spawn(async (cx) => {
+        try { Object.assign(entry, await choices(this.creds, project)); }
+        catch (e) { entry.error = errText(e); }
+        entry.loading = false;
+        this.choicesRunning--;
+        this.metaVersion++;
+        this.wantShownPictures(cx);
+        this.pumpChoices(cx);
+        cx.notify();
+      });
+    }
   }
 
   toggleMenu(k, kind, cx) {
@@ -895,6 +941,7 @@ export default class Tickets extends View {
 
   /** What was loaded for an account: gone when the credentials change or are forgotten. */
   forgetAccount() {
+    forgetRemembered();
     this.cache.clear();
     this.projectList = null;
     this.meta.clear();
