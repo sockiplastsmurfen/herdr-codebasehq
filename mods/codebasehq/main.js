@@ -169,7 +169,9 @@ export default class Tickets extends View {
       : this.repo?.remote ? "from git remote"
       : this.repo?.root ? "default: this repo has no Codebase remote"
       : "default outside a repo";
-    return { permalink, all: permalink === ALL, name: permalink === ALL ? "All projects" : permalink, source };
+    // The project's own name ("Example Shop") once the project list is in, else its permalink.
+    const name = permalink === ALL ? "All projects" : this.projectList?.find((x) => x.permalink === permalink)?.name ?? permalink;
+    return { permalink, all: permalink === ALL, name, source };
   }
 
   account() {
@@ -219,6 +221,7 @@ export default class Tickets extends View {
     const last = more ? entry.pages + BATCH : Math.max(entry.pages, BATCH);
     entry.loading = true;
     this.loadChoices(p.permalink, cx);
+    this.ensureProjects(cx); // for the project's name
     cx.notify();
     cx.spawn(async (cx) => {
       let list = more ? [...(entry.tickets ?? [])] : [];
@@ -794,8 +797,8 @@ export default class Tickets extends View {
     const entry = this.entryFor(p.permalink);
     const tickets = entry.tickets;
     const resolution = this.filterFor(p.permalink).resolution;
-    const count = tickets ? ` · ${tickets.length}${entry.more ? "+" : ""}${resolution === "all" ? "" : ` ${resolution}`}` : "";
-    const subtitle = `${p.name}${count}`;
+    // The project's name is on the line under the header.
+    const subtitle = tickets ? `${tickets.length}${entry.more ? "+" : ""}${resolution === "all" ? "" : ` ${resolution}`}` : "";
     const boardOpen = !p.all && Boolean(viewerPane("kanban")) && shared(BOARD)?.project === p.permalink;
     const header = this.header(t, "Tickets", subtitle, [
       ...(p.all ? [] : [this.icon(t, "kanban", "mods/codebasehq/icons/kanban.svg", (cx) => { if (!boardOpen) this.hideList(); toggleKanban(p, cx); cx.notify(); },
@@ -898,11 +901,21 @@ export default class Tickets extends View {
     return v_flex().size_full().min_h(0)
       .child(header)
       .child(v_flex().id("tickets-list").flex_1().min_h(0).overflow_y_scrollbar()
-        .child(h_flex().px(14).pt(10).pb(8).gap(6).items_center()
-          .child(div().flex_1().min_w(0).text_size(11.5).text_color(t.dim).truncate().child(`${p.name} · ${p.source}`))
-          .when(!p.all, (el) => el.child(this.link(t, "open-all", "All in Codebase", (cx) => openLink(cx, ticketsUrl(this.webBase(), p.permalink))))))
+        .child(this.projectLine(t, p))
         .child(this.renderFilters(t, p.permalink))
         .child(content));
+  }
+
+  /**
+   * The line under the header: the project's name, an icon linking to its tickets in Codebase,
+   * then where the project comes from. All projects has no page: no icon.
+   */
+  projectLine(t, p) {
+    return h_flex().px(14).pt(10).pb(8).gap(4).items_center().text_size(12)
+      .child(div().flex_shrink_1().min_w(0).truncate().font_semibold().child(p.name))
+      .when(!p.all, (el) => el.child(div().flex_none().mr(-2).child(iconLink(t, "project-link", "mods/codebasehq/external.svg",
+        (cx) => openLink(cx, ticketsUrl(this.webBase(), p.permalink)), null, `Open ${p.name}'s tickets in Codebase`))))
+      .child(div().flex_1().min_w(0).text_size(11.5).text_color(t.dim).truncate().child(`· ${p.source}`));
   }
 
   /**
