@@ -20,7 +20,7 @@ import {
 import { fetchBoard, boardView } from "./kanban.js";
 import { NO_FILTER } from "./filters.js";
 import { OPEN, BOARD } from "./panes.js";
-import { toggleStartWork, startWorkView } from "./startwork.js";
+import { toggleStartWork, startWorkView, watchCheckouts, canStartWork } from "./startwork.js";
 
 const CHECK = 300;        // look at what to show (no request unless it changed)
 const REFRESH = 60000;    // new notes
@@ -218,6 +218,8 @@ export class Viewer {
     this.response.set_auto_grow(4, 14);
     this.response.on("submit", (e, cx) => { if (e?.secondary) this.postResponse(cx); });
     this.start = null;          // the Start work form (startwork.js), for one ticket
+    this.checkouts = [];        // the shown space's checkouts of the ticket's project (watchCheckouts)
+    this.repos = new Map();     // folder -> repoOf(), asked once
     this.branchInput = InputState.new({ placeholder: "Branch" });
     if (checking()) return;
     cx.spawn(async (cx) => {
@@ -226,7 +228,7 @@ export class Viewer {
       this.check(cx);
       cx.notify();
     });
-    cx.timer.every(CHECK, (cx) => { this.check(cx); this.followChanges(cx); });
+    cx.timer.every(CHECK, (cx) => { this.check(cx); this.followChanges(cx); watchCheckouts(this, cx); });
     cx.timer.every(REFRESH, (cx) => this.load(cx));
   }
 
@@ -753,8 +755,8 @@ export class Viewer {
           .child(div().flex_none().text_color(t.muted).child(`#${k.id}`))
           .child(div().flex_1().min_w(0).child(k.summary)))
         .child(h_flex().flex_none().gap(2).mr(-4)
-          .child(iconButton("view-start", "mods/codebasehq/icons/branch-plus.svg", (cx) => toggleStartWork(this, cx),
-            this.start?.key === this.key ? t.accent : null, "Start work: a branch for this ticket, In Progress", this.start?.key === this.key))
+          .when(canStartWork(this), (el) => el.child(iconButton("view-start", "mods/codebasehq/icons/branch-plus.svg", (cx) => toggleStartWork(this, cx),
+            this.start?.key === this.key ? t.accent : null, "Start work: a branch for this ticket, In Progress", this.start?.key === this.key)))
           .child(iconButton("view-copy", this.copied ? "mods/codebasehq/check.svg" : "mods/codebasehq/copy.svg", (cx) => {
             cx.write_to_clipboard(`#${k.id} ${k.summary}`);
             this.copied = true;

@@ -1,33 +1,45 @@
-// "Start work" on a ticket (the branch icon in the ticket pane): a branch named after it in a
-// local checkout of its project (branchName: "583-drupal-11-…"), and the ticket set going, In
+// "Start work" on a ticket (the branch icon in the ticket pane, shown when the space has a
+// checkout of the ticket's project): a branch named after it in that checkout (branchName: "583-drupal-11-…"), and the ticket set going, In
 // Progress and assigned to you if nobody has it, as one note. A form under the header shows the
 // branch (to edit), the checkouts to pick from and what will change, before anything happens.
 import { div } from "gpui-kit";
 import { v_flex, h_flex, Input } from "gpui-base";
-import { panes, spaces, shared, notify } from "herdr";
-import { repoOf, findProjectCheckouts, expandHome, branchName, validBranch, startBranch, updateTicket, usernameOf } from "./codebase.js";
+import { panes, spaces, notify } from "herdr";
+import { repoOf, branchName, validBranch, startBranch, updateTicket, usernameOf } from "./codebase.js";
 import { errText, setField, announceChange, textButton } from "./ui.js";
 
 // A status that means work has started, by its name.
 const IN_PROGRESS = /in progress|ongoing|started|doing|pågår|pågående|påbörja|under arbete/i;
 
 /**
- * The project's local checkouts: those the terminals in the shown tab are in first, then the
- * other terminals', then those in the default project folder (Settings in the panel).
+ * Keeps v.checkouts: the shown space's checkouts of the shown ticket's project, from its
+ * terminals' folders (the shown tab's first) and its own folder. Start work shows only when
+ * there is one. Called often (the ticket pane's 300ms check): asks git only when the space,
+ * the project or a terminal's folder changed, and once per folder.
  */
-async function checkouts(project) {
-  const local = new Set(spaces().filter((s) => !s.machine).flatMap((s) => s.tabs.map((x) => x.id)));
-  const shown = spaces().find((s) => s.active)?.tabs?.find((x) => x.active)?.id;
-  const cwds = panes().filter((p) => p.cwd && local.has(p.tab)).sort((a, b) => (b.tab === shown) - (a.tab === shown)).map((p) => p.cwd);
-  const found = [];
-  for (const cwd of new Set(cwds)) {
-    const repo = await repoOf(cwd).catch(() => null);
-    if (repo?.remote?.project === project && !found.includes(repo.root)) found.push(repo.root);
-  }
-  for (const folder of await findProjectCheckouts(project, [expandHome(shared("codebasehq.projectsDir") ?? "~/Sites")]).catch(() => [])) {
-    if (!found.includes(folder)) found.push(folder);
-  }
-  return found;
+export function watchCheckouts(v, cx) {
+  const space = spaces().find((s) => s.active);
+  const project = v.ref && v.ref.view !== "kanban" ? v.ref.project : null;
+  const shown = space?.tabs?.find((x) => x.active)?.id, tabs = new Set((space?.tabs ?? []).map((x) => x.id));
+  const cwds = panes().filter((p) => p.cwd && tabs.has(p.tab)).sort((a, b) => (b.tab === shown) - (a.tab === shown)).map((p) => p.cwd);
+  const folders = [...new Set([...cwds, space?.folder].filter(Boolean))];
+  const sig = `${space?.id}|${project}|${folders.join("|")}`;
+  if (sig === v.checkoutsSig) return;
+  v.checkoutsSig = sig;
+  // Only this computer's spaces: git runs here.
+  if (!project || !space || space.machine) { v.checkouts = []; cx.notify(); return; }
+  cx.spawn(async (cx) => {
+    const roots = [];
+    for (const folder of folders) {
+      if (!v.repos.has(folder)) v.repos.set(folder, await repoOf(folder).catch(() => null));
+      const repo = v.repos.get(folder);
+      if (repo?.remote?.project === project && !roots.includes(repo.root)) roots.push(repo.root);
+    }
+    if (v.checkoutsSig !== sig) return;
+    v.checkouts = roots;
+    if (v.start && !roots.includes(v.start.folder)) v.start.folder = roots[0] ?? null;
+    cx.notify();
+  });
 }
 
 /** What starting will change on the ticket: { changes (for the API), lines (for the form), picked (kind -> option) }. */
@@ -47,20 +59,17 @@ function plan(v) {
   return out;
 }
 
-/** Opens (or closes) the form for the shown ticket and looks for its checkouts. */
+/** Opens (or closes) the form for the shown ticket, in the first of the space's checkouts. */
 export function toggleStartWork(v, cx) {
   if (v.start?.key === v.key) { if (!v.start.busy) v.start = null; cx.notify(); return; }
-  const ref = v.ref, s = { key: v.key, folders: null, folder: null, busy: false, error: null };
-  v.start = s;
-  v.branchInput.set_value(branchName(ref.id, v.ticket?.summary));
-  v.loadMeta(ref.project, cx);
+  v.start = { key: v.key, folder: v.checkouts?.[0] ?? null, busy: false, error: null };
+  v.branchInput.set_value(branchName(v.ref.id, v.ticket?.summary));
+  v.loadMeta(v.ref.project, cx);
   cx.notify();
-  cx.spawn(async (cx) => {
-    try { s.folders = await checkouts(ref.project); s.folder = s.folders[0] ?? null; }
-    catch (e) { s.folders = []; s.error = errText(e); }
-    cx.notify();
-  });
 }
+
+/** Whether Start work can show: the shown space has a checkout of the ticket's project. */
+export const canStartWork = (v) => Boolean(v.checkouts?.length);
 
 async function start(v, cx) {
   const s = v.start, ref = v.ref, k = v.ticket;
@@ -95,11 +104,10 @@ export function startWorkView(v, t) {
   if (!s || s.key !== v.key) return null;
   const label = (text) => div().w(84).flex_none().text_size(12).text_color(t.dim).child(text);
   const p = plan(v);
-  const folders = s.folders === null
-    ? div().text_size(12).text_color(t.dim).child("Looking for checkouts…")
-    : !s.folders.length
-    ? div().text_size(12).text_color(t.ansi1).child("No checkout of this project here or in the default project folder. Click the project's name in All projects to clone it.")
-    : h_flex().flex_wrap().gap(6).children(s.folders.map((f) => {
+  const list = v.checkouts ?? [];
+  const folders = !list.length
+    ? div().text_size(12).text_color(t.ansi1).child("This space has no checkout of the project.")
+    : h_flex().flex_wrap().gap(6).children(list.map((f) => {
       const on = f === s.folder;
       return div().id(`start-in-${f}`).h(24).px(8).rounded(6).flex().items_center().text_size(12).cursor_pointer()
         .border(1).border_color(on ? t.accent : t.border).bg(on ? t.selected : t.surface).hover((st) => st.bg(t.hover))

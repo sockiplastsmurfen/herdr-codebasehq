@@ -40,9 +40,10 @@ A [Herdr](https://herdr.dev) mod for [Codebase HQ](https://www.codebasehq.com) t
   folded away; click the ticket's title in the pane to show them. Click status, priority, type, category,
   assignee or milestone there to change it, as on a card in the list. The arrow icon in its header
   scrolls to the latest note. Clicking another title shows that ticket in the same pane; clicking the shown one again closes it.
-- **Start work** (the branch icon by a ticket's title in the ticket pane): a form with the
-  branch, named after the ticket as `583-drupal-11-i-november-december` (edit it if you like),
-  the project's local checkouts to pick from (those your terminals are in first), and what will
+- **Start work** (the branch icon by a ticket's title in the ticket pane, shown when the space
+  has a checkout of the ticket's project): a form with the branch, named after the ticket as
+  `583-drupal-11-i-november-december` (edit it if you like), the space's checkouts of the
+  project to pick from (those the shown tab's terminals are in first), and what will
   change on the ticket: In Progress, and assigned to you if nobody has it. **Start** switches
   the checkout to the branch (a new one from origin's default branch, fetched first; an existing
   one as it is) and saves the changes as one note.

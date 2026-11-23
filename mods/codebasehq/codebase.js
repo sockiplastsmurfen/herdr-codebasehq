@@ -373,10 +373,6 @@ export async function findProjectCheckout(project, folders) {
   return (await findCheckouts(folders, (url) => parseRemote(url)?.project === project, true))[0] ?? null;
 }
 
-/** Every checkout of the project's repositories in the folders or next to them. */
-export function findProjectCheckouts(project, folders) {
-  return findCheckouts(folders, (url) => parseRemote(url)?.project === project, false);
-}
 
 /**
  * Clones a repository into <parent>/<name> (a leading ~ is the home folder) and returns that
