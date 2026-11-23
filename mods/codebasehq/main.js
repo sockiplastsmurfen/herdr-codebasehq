@@ -312,20 +312,35 @@ export default class Tickets extends View {
    */
   async spaceFor(project) {
     const list = spaces(), all = panes();
+    // The checkout's root when the folder is in the project, else null.
     const inProject = async (s, folder) => {
       const key = `${s.machine ?? ""}\n${folder}`;
       if (!this.folderRepos.has(key)) {
         this.folderRepos.set(key, await repoOf(folder, s.machine ?? undefined).catch(() => null));
       }
-      return this.folderRepos.get(key)?.remote?.project === project;
+      const repo = this.folderRepos.get(key);
+      return repo?.remote?.project === project ? repo.root : null;
     };
     for (const s of list) {
       const tabs = new Set(s.tabs.map((x) => x.id));
       const folders = new Set(all.filter((x) => tabs.has(x.tab) && x.cwd).map((x) => x.cwd));
-      for (const folder of folders) if (await inProject(s, folder)) return s;
+      for (const folder of folders) { const root = await inProject(s, folder); if (root) return { space: s, root }; }
     }
-    for (const s of list) if (s.folder && await inProject(s, s.folder)) return s;
+    for (const s of list) {
+      const root = s.folder ? await inProject(s, s.folder) : null;
+      if (root) return { space: s, root };
+    }
     return null;
+  }
+
+  /**
+   * Going to a project from its name: the list there shows that project, so a project or All
+   * projects picked for that checkout before is let go (it follows the git remote again).
+   */
+  followRemote(root) {
+    if (!root || !(root in this.chosen)) return;
+    delete this.chosen[root];
+    try { localStorage.setItem("projects", JSON.stringify(this.chosen)); } catch {}
   }
 
   /**
@@ -334,13 +349,18 @@ export default class Tickets extends View {
    */
   goToProject(k, cx) {
     cx.spawn(async (cx) => {
-      const s = await this.spaceFor(k.project);
-      if (s) { run("space.select", { id: s.id }); await this.showListIn((x) => x.id === s.id, cx); return; }
+      const found = await this.spaceFor(k.project);
+      if (found) {
+        this.followRemote(found.root);
+        run("space.select", { id: found.space.id });
+        await this.showListIn((x) => x.id === found.space.id, cx);
+        return;
+      }
       const local = spaces().filter((x) => !x.machine);
       const tabs = new Set(local.flatMap((x) => x.tabs.map((tab) => tab.id)));
       const folders = [expandHome(this.projectsDir), ...local.map((x) => x.folder), ...panes().filter((x) => tabs.has(x.tab)).map((x) => x.cwd)];
       const folder = await findProjectCheckout(k.project, [...new Set(folders.filter(Boolean))]).catch(() => null);
-      if (folder) { run("space.new", { folder }); await this.showListIn((x) => x.folder === folder, cx); }
+      if (folder) { this.followRemote(folder); run("space.new", { folder }); await this.showListIn((x) => x.folder === folder, cx); }
       else this.openClone(k, cx);
     });
   }

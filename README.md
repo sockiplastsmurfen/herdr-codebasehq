@@ -13,7 +13,7 @@ A [Herdr](https://herdr.dev) mod for [Codebase HQ](https://www.codebasehq.com) t
   or **All projects**, for that repo; the choice is remembered per repo. Outside a Codebase
   repo the default is **All projects**: every active project is asked (8 at a time) and the
   answers are merged, newest first, with the project's name on each card. Click the name to
-  go to the space that works in that project, or to open one in a local checkout of it
+  go to the space that works in that project (the list there then shows that project), or to open one in a local checkout of it
   (looked for in the default project folder, and in and next to your spaces' folders). Without
   one, it lists the project's repositories: pick one and a folder (the default project folder)
   and it is cloned there, with a progress bar. The
