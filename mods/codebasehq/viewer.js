@@ -228,13 +228,27 @@ export class Viewer {
     this.branchInput = InputState.new({ placeholder: "Branch" });
     if (checking()) return;
     cx.spawn(async (cx) => {
-      try { this.creds = await loadCredentials(); } catch { this.creds = null; }
+      try { this.creds = (await loadCredentials()) ?? null; } catch { this.creds = null; }
+      this.credsAt = Date.now();
       if (!this.creds) this.error = "No Codebase credentials yet: set them up in the Tickets panel.";
       this.check(cx);
       cx.notify();
     });
     cx.timer.every(CHECK, (cx) => { this.check(cx); this.followChanges(cx); watchCheckouts(this, cx); });
     cx.timer.every(REFRESH, (cx) => this.load(cx));
+  }
+
+  /** Reads the credentials again, at most every 10 seconds; once they are there, the pane loads. */
+  lookForCredentials(cx) {
+    if (this.credsLooking || Date.now() - (this.credsAt ?? 0) < 10000) return;
+    this.credsLooking = true;
+    cx.spawn(async (cx) => {
+      try { this.creds = (await loadCredentials()) ?? null; } catch { this.creds = null; }
+      this.credsAt = Date.now();
+      this.credsLooking = false;
+      if (this.creds) { this.error = null; this.key = undefined; this.check(cx); }
+      cx.notify();
+    });
   }
 
   /** A ticket changed (in the panel, or noticed by it): the board (or the ticket, if it is that one) reloads. */
@@ -265,6 +279,8 @@ export class Viewer {
 
   check(cx) {
     if (this.creds === undefined) return;
+    // No credentials when the pane opened: look again now and then, for when they are saved.
+    if (this.creds === null) { this.lookForCredentials(cx); return; }
     const w = this.wanted();
     const key = !w ? null : w.view === "kanban" ? `kanban:${w.project}` : `${w.project}-${w.id}`;
     if (key === this.key) return;
@@ -293,7 +309,8 @@ export class Viewer {
     this.loading = true;
     cx.spawn(async (cx) => {
       // The account's people, asked once (with the first load).
-      const users = this.users ? Promise.resolve(this.users) : accountUsers(this.creds).catch(NO_USERS);
+      // Kept only when they came: if asking fails, names show as "User <id>" and the next load asks again.
+      const users = this.users ? Promise.resolve(this.users) : accountUsers(this.creds).then((u) => (this.users = u)).catch(NO_USERS);
       if (ref.view === "kanban") await this.loadBoard(ref, users, cx);
       else await this.loadTicket(ref, users, cx);
       this.loading = false;
@@ -313,7 +330,7 @@ export class Viewer {
       const [ticket, notes] = await Promise.all([
         ticketDetail(this.creds, ref.project, ref.id),
         ticketNotes(this.creds, ref.project, ref.id),
-        users.then((u) => { this.users = u; }),
+        users,
       ]);
       if (this.ref !== ref) return;
       this.ticket = ticket; this.notes = notes; this.error = null;
@@ -510,8 +527,7 @@ export class Viewer {
   }
 
   /** Adds files to the shown ticket's response (from the chooser, or dropped on the form). */
-  attach(paths, cx) {
-    const r = this.reply;
+  attach(paths, cx, r = this.reply) {
     for (const p of paths) if (p && !r.files.includes(p)) r.files.push(p);
     r.error = null;
     cx.notify();
@@ -524,7 +540,8 @@ export class Viewer {
     r.choosing = true;
     cx.notify();
     cx.spawn(async (cx) => {
-      try { this.attach(await chooseFiles(), cx); } catch (e) { r.error = errText(e); }
+      // The ticket the chooser was opened for, even if another shows by now.
+      try { this.attach(await chooseFiles(), cx, r); } catch (e) { r.error = errText(e); }
       r.choosing = false;
       cx.notify();
     });
@@ -588,7 +605,7 @@ export class Viewer {
       .when(Boolean(r.error), (el) => el.child(div().text_size(12).text_color(t.ansi1).child(r.error)))
       .child(h_flex().gap(8).items_center()
         .child(button("respond-post", r.progress ?? (r.posting ? "Posting…" : "Post"), (cx) => this.postResponse(cx), true))
-        .child(button("respond-cancel", "Cancel", (cx) => { this.clearReply(this.key); cx.notify(); }))
+        .child(button("respond-cancel", "Cancel", (cx) => { if (!r.posting) this.clearReply(this.key); cx.notify(); }))
         .child(button("respond-attach", r.choosing ? "Choosing…" : "Attach…", (cx) => this.chooseAttachments(cx)))
         .child(div().flex_1().min_w(0).text_size(11).text_color(t.dim).truncate()
           .child(changes ? `${changes} detail${changes > 1 ? "s" : ""} changed` : "Drop files here to attach them"))
@@ -637,7 +654,7 @@ export class Viewer {
       const old = this.board?.project === ref.project && Date.now() - (this.board.metaAt ?? 0) < META_AGE ? this.board : null;
       const [board] = await Promise.all([
         fetchBoard(this.creds, ref.project, this.boardFilter(ref.project), old?.meta),
-        users.then((u) => { this.users = u; }),
+        users,
       ]);
       if (this.ref !== ref) return;
       this.board = { project: ref.project, ...board, metaAt: old?.metaAt ?? Date.now(), error: null };
@@ -674,16 +691,18 @@ export class Viewer {
   /** Opens or closes a commit's diff; the first time, finds a local clone and runs git show there. */
   toggleDiff(c, cx) {
     const d = this.diffs.get(c.ref);
-    if (d) { d.open = !d.open; cx.notify(); return; }
+    // One that failed is tried again.
+    if (d && !d.error) { d.open = !d.open; cx.notify(); return; }
     const entry = { open: true, loading: true, rows: null, error: null, limit: DIFF_LINES };
     this.diffs.set(c.ref, entry);
     cx.notify();
     cx.spawn(async (cx) => {
       try {
         let folder = this.clones.get(c.cloneUrl);
-        if (folder === undefined) {
+        if (!folder) {
           folder = await findClone(c.cloneUrl, spaces().filter((s) => s.folder && !s.machine).map((s) => s.folder));
-          this.clones.set(c.cloneUrl, folder);
+          // Only a clone found is kept: one made later is found next time.
+          if (folder) this.clones.set(c.cloneUrl, folder);
         }
         if (!folder) throw new Error(`No local clone of ${c.repoName} was found next to your spaces' folders. Open the commit in Codebase instead.`);
         entry.rows = diffRows(await commitDiff(folder, c.ref, c.branch));
@@ -698,7 +717,8 @@ export class Viewer {
   /** Opens or closes an image; the first time, downloads it through the API (see downloadUpload). */
   toggleImage(img, cx) {
     const d = this.images.get(img.id);
-    if (d) { d.open = !d.open; cx.notify(); return; }
+    // One that failed is tried again.
+    if (d && !d.error) { d.open = !d.open; cx.notify(); return; }
     this.fetchImage(img, cx);
   }
 
@@ -706,7 +726,11 @@ export class Viewer {
   openInlineImages(notes, cx) {
     const base = this.base();
     for (const n of notes) {
-      for (const b of prepareNote(n, base).content) if (b.image && !this.images.has(b.image.id)) this.fetchImage(b.image, cx);
+      for (const b of prepareNote(n, base).content) {
+        const d = b.image && this.images.get(b.image.id);
+        // New ones, and ones that failed (tried again with each refresh of the notes).
+        if (b.image && (!d || (d.error && !d.loading))) this.fetchImage(b.image, cx);
+      }
     }
   }
 

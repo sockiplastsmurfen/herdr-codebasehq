@@ -259,13 +259,19 @@ export async function downloadAvatars(appHome, people) {
     '  if [ -e "$dir/$id.none" ]; then echo "$id"; continue; fi',
     '  found=$(ls "$dir/$id"-*.png "$dir/$id"-*.jpg "$dir/$id"-*.gif "$dir/$id"-*.webp 2>/dev/null | head -n 1)',
     '  if [ -n "$found" ]; then printf "%s\\t%s\\n" "$id" "${found##*/}"; continue; fi',
-    '  type=$(curl -sfL --max-time 10 -o "$dir/$id.part" -w "%{content_type}" "$url") || type=""',
+    // A part file of this run's own: another copy of the mod may fetch the same person at once.
+    '  part="$dir/$id.part.$$"',
+    '  res=$(curl -sL --max-time 10 -o "$part" -w "%{http_code} %{content_type}" "$url") || res="000"',
+    '  code=${res%% *}; type=${res#* }',
     '  case "$type" in *png*) ext=png;; *jpeg*|*jpg*) ext=jpg;; *gif*) ext=gif;; *webp*) ext=webp;; *) ext="";; esac',
-    '  sum=$(shasum -a 256 "$dir/$id.part" 2>/dev/null | cut -c1-64)',
-    '  if [ -n "$ext" ] && [ "$sum" != "$none" ]; then',
+    '  sum=$(shasum -a 256 "$part" 2>/dev/null | cut -c1-64)',
+    '  if [ "$code" = 200 ] && [ -n "$ext" ] && [ "$sum" != "$none" ]; then',
     // The content's hash in the name: a changed picture is a new path (the app keeps images by path).
-    '    file="$id-$(printf %s "$sum" | cut -c1-10).$ext"; mv "$dir/$id.part" "$dir/$file"; printf "%s\\t%s\\n" "$id" "$file"',
-    '  else rm -f "$dir/$id.part"; : > "$dir/$id.none"; echo "$id"; fi',
+    '    file="$id-$(printf %s "$sum" | cut -c1-10).$ext"; mv "$part" "$dir/$file" && printf "%s\\t%s\\n" "$id" "$file"',
+    // No picture: a 404, the silhouette, or not a picture. Kept, so it isn't asked again.
+    '  elif [ "$code" = 200 ] || [ "$code" = 404 ]; then rm -f "$part"; : > "$dir/$id.none"; echo "$id"',
+    // Offline, a timeout, a server error: nothing kept, the next start asks again.
+    '  else rm -f "$part"; fi',
     'done',
   ].join("\n");
   const r = await exec("/bin/sh", ["-c", script, "sh", dir, NO_PICTURE, ...list.flatMap((p) => [String(p.id), p.url])], { timeout: 120000 });
@@ -551,10 +557,12 @@ async function fetchUpload(creds, id, file, then = "", timeout = 60000) {
     'set -e',
     'mkdir -p "$(dirname "$2")"',
     'if [ ! -s "$2" ]; then',
+    // A part file of this run's own (two downloads of one file can run at once), gone if it fails.
+    '  part="$2.part.$$"; trap \'rm -f "$part"\' EXIT',
     '  key=$(security find-generic-password -s "$4" -w)',
     // A quoted value in curl's config: backslashes and quotes escaped.
-    '  printf \'user = "%s"\\n\' "$(printf %s "$1:$key" | sed \'s/[\\\\"]/\\\\&/g\')" | curl -sfL -K - -o "$2.part" "$3"',
-    '  mv "$2.part" "$2"',
+    '  printf \'user = "%s"\\n\' "$(printf %s "$1:$key" | sed \'s/[\\\\"]/\\\\&/g\')" | curl -sfL -K - -o "$part" "$3"',
+    '  mv "$part" "$2"',
     'fi',
     then,
   ].join("\n"), "sh", creds.user, file, `${API}/uploads/${id}`, SERVICE], { timeout });

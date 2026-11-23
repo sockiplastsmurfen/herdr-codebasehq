@@ -359,6 +359,8 @@ export default class Tickets extends View {
         const next = more ? new Map(entry.next) : new Map(this.projectList.map((x) => [x.permalink, 1]));
         const names = new Map(this.projectList.map((x) => [x.permalink, x.name]));
         let list = more ? [...(entry.tickets ?? [])] : [];
+        // A ticket updated between two loads can come again on the next page.
+        const seen = new Set(list.map((k) => k.uid));
         const fresh = !entry.tickets;
         const failed = [];
         const queue = [...next.keys()];
@@ -367,7 +369,9 @@ export default class Tickets extends View {
           for (let project = queue.shift(); project; project = queue.shift()) {
             try {
               const r = await ticketPage(this.creds, project, search, next.get(project), "priority");
-              list = list.concat(r.tickets.map((k) => tag(k, project, names.get(project))));
+              const add = r.tickets.map((k) => tag(k, project, names.get(project))).filter((k) => !seen.has(k.uid));
+              for (const k of add) seen.add(k.uid);
+              list = list.concat(add);
               if (r.more) next.set(project, next.get(project) + 1); else next.delete(project);
             } catch (e) {
               if (e instanceof ApiError && e.status === 401) throw e;
@@ -450,21 +454,29 @@ export default class Tickets extends View {
    * none, opens one in a local checkout of the project found next to the spaces' folders.
    */
   goToProject(k, cx) {
+    // One at a time: a second click while looking would open a second space.
+    if (this.going) return;
+    this.going = true;
     cx.spawn(async (cx) => {
-      const found = await this.spaceFor(k.project);
-      if (found) {
-        this.followRemote(found.root);
-        run("space.select", { id: found.space.id });
-        await this.showListIn((x) => x.id === found.space.id, cx);
-        return;
-      }
-      const local = spaces().filter((x) => !x.machine);
-      const tabs = new Set(local.flatMap((x) => x.tabs.map((tab) => tab.id)));
-      const folders = [expandHome(this.projectsDir), ...local.map((x) => x.folder), ...panes().filter((x) => tabs.has(x.tab)).map((x) => x.cwd)];
-      const folder = await findProjectCheckout(k.project, [...new Set(folders.filter(Boolean))]).catch(() => null);
-      if (folder) { this.followRemote(folder); run("space.new", { folder }); await this.showListIn((x) => x.folder === folder, cx); }
-      else this.openClone(k, cx);
+      try { await this.goTo(k, cx); } finally { this.going = false; }
     });
+  }
+
+  /** Goes to the project's space, else opens one in a checkout of it, else offers to clone it. */
+  async goTo(k, cx) {
+    const found = await this.spaceFor(k.project);
+    if (found) {
+      this.followRemote(found.root);
+      run("space.select", { id: found.space.id });
+      await this.showListIn((x) => x.id === found.space.id, cx);
+      return;
+    }
+    const local = spaces().filter((x) => !x.machine);
+    const tabs = new Set(local.flatMap((x) => x.tabs.map((tab) => tab.id)));
+    const folders = [expandHome(this.projectsDir), ...local.map((x) => x.folder), ...panes().filter((x) => tabs.has(x.tab)).map((x) => x.cwd)];
+    const folder = await findProjectCheckout(k.project, [...new Set(folders.filter(Boolean))]).catch(() => null);
+    if (folder) { this.followRemote(folder); run("space.new", { folder }); await this.showListIn((x) => x.folder === folder, cx); }
+    else this.openClone(k, cx);
   }
 
   /** No checkout of the project anywhere: offers to clone one of its repositories. */
@@ -669,10 +681,11 @@ export default class Tickets extends View {
    */
   async noteNotices(project, changed, since) {
     const me = this.myId();
+    if (me == null) return;
     const projectName = this.projectList?.find((x) => x.permalink === project)?.name ?? project;
     for (const k of changed.filter((x) => this.isMine(x)).slice(0, 3)) {
       const notes = (await ticketNotes(this.creds, project, k.id).catch(() => []))
-        .filter((n) => n.created > since && (me == null || n.userId !== me));
+        .filter((n) => n.created > since && n.userId !== me);
       const n = notes[notes.length - 1];
       if (!n) continue;
       const who = this.people?.byId?.get(n.userId) ?? "Someone";
@@ -865,8 +878,8 @@ export default class Tickets extends View {
           await saveCredentials(user, key);
           this.creds = await loadCredentials();
           if (!this.creds) throw new Error("Saved, but could not read it back from the keychain.");
-          this.cache.clear();
-          this.projectList = null;
+          this.forgetAccount();
+          this.loadPeople(cx);
         }
         this.key.set_value("");
         this.view = "list";
@@ -880,12 +893,23 @@ export default class Tickets extends View {
     });
   }
 
+  /** What was loaded for an account: gone when the credentials change or are forgotten. */
+  forgetAccount() {
+    this.cache.clear();
+    this.projectList = null;
+    this.meta.clear();
+    this.metaVersion++;
+    this.newest.clear();
+    this.people = null;
+    this.pictures.clear();
+    this.picturesAsked = null;
+  }
+
   forget(cx) {
     cx.spawn(async (cx) => {
       await forgetCredentials().catch(() => {});
       this.creds = null;
-      this.cache.clear();
-      this.projectList = null;
+      this.forgetAccount();
       this.openSetup(cx);
     });
   }

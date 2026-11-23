@@ -91,10 +91,49 @@ v.openInlineImages(v.notes, cx);
 check("an image in the text unfolds by itself", v.images.get("bbbbbbbbbbbbbbbbbbbb1")?.open === true);
 check("an attached image below the text stays folded", !v.images.has("bbbbbbbbbbbbbbbbbbbb2"));
 await settle(3);
+// (The mock has no pictures, so the download failed: it came in after all.)
+Object.assign(v.images.get("bbbbbbbbbbbbbbbbbbbb1"), { loading: false, error: null, path: "data/x.png", width: 10, height: 10 });
 click(v.render(t), `img-${v.notes[0].id}-bbbbbbbbbbbbbbbbbbbb1`, cx);
 check("its arrow still folds it", v.images.get("bbbbbbbbbbbbbbbbbbbb1")?.open === false);
 click(v.render(t), `img-${v.notes[0].id}-bbbbbbbbbbbbbbbbbbbb1`, cx);
-v.images.get("bbbbbbbbbbbbbbbbbbbb1").loading = false; v.images.get("bbbbbbbbbbbbbbbbbbbb1").error = null; v.images.get("bbbbbbbbbbbbbbbbbbbb1").path = "data/x.png";
 click(v.render(t), `img-show-${v.notes[0].id}-bbbbbbbbbbbbbbbbbbbb1`, cx);
 const shown = world.overlays.at(-1);
 check("clicking the image shows it in the dialog, as a picture", shown?.kind === "dialog" && shown.props.id === "bbbbbbbbbbbbbbbbbbbb1" && shown.props.name === "screen.png", shown);
+
+// Cancel while a response is being posted doesn't throw it away.
+{
+  v.reply.open = true; v.response.set_value("A reply");
+  let release;
+  const before = world.exec;
+  world.exec = (cmd, args) => (String(args?.[1]).includes("files[]=@") ? new Promise((r) => { release = () => r({ code: 1, stdout: "", stderr: "upload refused\n" }); }) : undefined);
+  v.reply.files = ["/tmp/x/a.pdf"];
+  click(v.render(t), "respond-post", cx); await settle(2);
+  click(v.render(t), "respond-cancel", cx);
+  check("Cancel while posting leaves the response alone", v.reply.posting && v.reply.files.length === 1);
+  release(); await settle(4);
+  check("… so a failure shows on it", /upload refused/.test(v.reply.error ?? ""), v.reply.error);
+  world.exec = before;
+}
+
+// Files chosen while another ticket came to show go to the ticket the chooser was opened for.
+{
+  const key = v.key, r = v.reply;
+  r.files = []; r.posting = false;
+  let release;
+  world.exec = (cmd) => (cmd === "osascript" ? new Promise((res) => { release = () => res({ code: 0, stdout: "/tmp/x/chosen.pdf\n", stderr: "" }); }) : undefined);
+  click(v.render(t), "respond-attach", cx); await settle(2);
+  world.shared["codebasehq.open"] = { project: "example-shop", id: 121, uid: "example-shop-121" }; v.check(cx); await settle(4);
+  release(); await settle(3);
+  check("chosen files go to the ticket the chooser was for", r.files.join() === "/tmp/x/chosen.pdf" && v.reply.files.length === 0 && v.key !== key, { was: r.files, now: v.reply.files });
+  world.exec = null;
+}
+
+// A diff that failed is tried again on the next click.
+{
+  world.shared["codebasehq.open"] = { project: "example-shop", id: 118, uid: "example-shop-118" }; v.check(cx); await settle(6);
+  const c = v.commits.values().next().value;
+  v.diffs.set(c.ref, { open: true, loading: false, rows: null, error: "No local clone", limit: 10 });
+  v.toggleDiff(c, cx);
+  check("a failed diff is fetched again, not just folded", v.diffs.get(c.ref).loading === true);
+  await settle(3);
+}

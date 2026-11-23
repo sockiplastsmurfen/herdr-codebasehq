@@ -18,3 +18,9 @@ check("… whose click opens the ticket", n?.action?.name === "codebasehq.open:e
 const before = world.notifications.length;
 await list.noteNotices("example-shop", [k], Date.now() - 30 * 60000);
 check("your own notes make none", world.notifications.length === before);
+
+// Before you are known (people not in yet, or another account), no notifications: else your own notes would make some.
+list.forgetAccount();
+const quiet = world.notifications.length;
+await list.noteNotices("example-shop", [k], Date.now() - 1300 * 60000);
+check("no notifications until you are known", list.myId() === null && world.notifications.length === quiet);

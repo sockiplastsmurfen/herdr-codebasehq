@@ -45,9 +45,12 @@ export function watchCheckouts(v, cx) {
   });
 }
 
-/** What starting will change on the ticket: { changes (for the API), lines (for the form), picked (kind -> option) }. */
-function plan(v) {
-  const k = v.ticket, meta = v.metas.get(v.ref.project);
+/**
+ * What starting will change on ticket k of the project: { changes (for the API), lines (for the
+ * form), picked (kind -> option) }.
+ */
+function plan(v, k, project) {
+  const meta = v.metas.get(project);
   const progress = meta?.statuses?.find((s) => !s.closed && isStartedStatus(s.name));
   const me = meta?.users?.find((u) => u.username && u.username === usernameOf(v.creds));
   const out = { changes: {}, lines: [], picked: {} };
@@ -99,7 +102,8 @@ function start(v, cx) {
       started.busy = false;
       // On the branch now; watchCheckouts sees it too once the terminal's branch changes.
       v.checkoutBranches?.set(s.folder, name);
-      const p = plan(v);
+      // The ticket Start was clicked for, even if another shows by now (git can take a while).
+      const p = plan(v, k, ref.project);
       if (Object.keys(p.changes).length) {
         await updateTicket(v.creds, ref.project, ref.id, p.changes);
         for (const [kind, option] of Object.entries(p.picked)) setField(k, kind, option);
@@ -124,7 +128,7 @@ export function startWorkView(v, t) {
   const s = v.start;
   if (!s || s.key !== v.key) return null;
   const label = (text) => div().w(84).flex_none().text_size(12).text_color(t.dim).child(text);
-  const p = plan(v);
+  const p = plan(v, v.ticket, v.ref.project);
   const list = v.checkouts ?? [];
   const folders = !list.length
     ? div().text_size(12).text_color(t.ansi1).child("This space has no checkout of the project.")

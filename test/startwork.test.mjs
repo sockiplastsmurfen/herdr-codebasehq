@@ -51,3 +51,20 @@ await at("/Users/demo/example-shop/web", "122-show-the-stock-level-on-the-produc
 check("the terminal on the new branch: still no icon", !icon());
 await at("/Users/demo/example-shop/web", "master");
 check("… and it comes back on another branch", icon());
+
+// Another ticket shown while git works: the changes still go to the ticket Start was for.
+{
+  await at("/Users/demo/example-shop/web", "master");
+  world.shared["codebasehq.open"] = { project: "example-shop", id: 119, uid: "example-shop-119" }; v.check(cx); await settle(5);
+  click(v.render(t), "view-start", cx); await settle(3);
+  let release;
+  const slow = world.exec;
+  world.exec = (cmd, args) => (String(args?.[1]).includes("git switch") ? new Promise((r) => { release = () => r({ code: 0, stdout: "new origin/master\n", stderr: "" }); }) : slow(cmd, args));
+  const before = world.saved.length;
+  click(v.render(t), "start-run", cx); await settle(2);
+  world.shared["codebasehq.open"] = { project: "example-shop", id: 121, uid: "example-shop-121" }; v.check(cx); await settle(5);
+  release(); await settle(6);
+  const made = world.saved.slice(before);
+  check("switching ticket while git works: the change goes to the ticket Start was for", made.length === 1 && made[0].id === 119 && made[0].changes.status_id === 13, made);
+  world.exec = slow;
+}
