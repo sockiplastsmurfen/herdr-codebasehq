@@ -4,7 +4,7 @@
 //   Which ticket it shows is shared("codebasehq.open"), so clicking another title in the list
 //   shows that one here instead of opening a second pane. Opened with props.view "kanban", the
 //   copy is the board pane instead, following shared("codebasehq.board"); both can be open at once.
-//   "Post a response" at the bottom of a ticket posts a note (Markdown) and, as in Codebase, any
+//   "Post a response" (the header's speech-bubble icon) opens a form at the bottom that posts a note (Markdown) and, as in Codebase, any
 //   details picked under it (status, priority, type, category, assignee, milestone); ⌘↩ posts too.
 import { div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, TextView, TextareaState, Textarea } from "gpui-base";
@@ -131,7 +131,7 @@ export class Viewer {
     this.loading = false;
     this.boardAgain = false;    // the board's filter changed while it loaded: load it again
     this.copied = false;
-    this.details = false;       // the fields are folded away until "Details" is clicked
+    this.details = false;       // the fields are folded away until the ticket's title is clicked
     this.detailMenu = null;     // the detail whose values are open under it
     this.savingDetail = null;   // { key, kind } while a changed detail is saved
     this.loadAgain = false;     // a response was posted while the ticket loaded: load it again
@@ -244,8 +244,9 @@ export class Viewer {
     if (this.key === key) { this.reply = this.replyFor(key); this.response.set_value(""); }
   }
 
-  /** Opens the response form under the notes, with the keyboard in it. */
-  openResponse(cx) {
+  /** Opens the response form under the notes, with the keyboard in it; again, folds it away (the text stays). */
+  toggleResponse(cx) {
+    if (this.reply.open && !this.reply.posting) { this.reply.open = false; this.reply.menu = null; cx.notify(); return; }
     this.reply.open = true;
     this.reply.error = null;
     if (this.ref) this.loadMeta(this.ref.project, cx);
@@ -315,7 +316,7 @@ export class Viewer {
   }
 
   /**
-   * The bottom of a ticket: "Post a response", or the form for it: the text, then the details
+   * The response form at the bottom of a ticket (opened from the header): the text, then the details
    * to change with it (a changed one is outlined; picking the ticket's own value again undoes it).
    */
   responseView(t, avatar) {
@@ -326,7 +327,6 @@ export class Viewer {
       .text_color(strong ? t.accent : t.foreground).hover((s) => s.bg(t.hover))
       .on_click((_e, cx) => onClick(cx)).child(label);
     const bar = v_flex().flex_none().px(18).py(12).gap(8).border_t(1).border_color(t.border);
-    if (!r.open) return bar.child(h_flex().child(button("respond", "Post a response", (cx) => this.openResponse(cx), true)));
 
     const kinds = ["status", "priority", "type", "category", "assignee", "milestone"];
     const changed = (kind) => kind in r.changes && (r.changes[kind].id ?? null) !== this.currentValue(kind).id;
@@ -637,8 +637,9 @@ export class Viewer {
     if (!this.ticket) return root.child(note(`Loading #${this.ref.id}…`));
 
     const k = this.ticket, base = this.base(), url = ticketUrl(base, this.ref.project, k.id);
-    const iconButton = (id, path, onClick, color, tip) =>
+    const iconButton = (id, path, onClick, color, tip, active = false) =>
       div().id(id).flex_none().size(26).rounded(6).flex().items_center().justify_center()
+        .when(active, (el) => el.bg(t.selected))
         .text_color(color ?? t.dim).hover((s) => s.bg(t.hover).text_color(color ?? t.foreground))
         .tooltip(tip)
         .on_click((_e, cx) => onClick(cx)).child(svg(path).size(14));
@@ -665,11 +666,13 @@ export class Viewer {
           this.optionsMenu(t, `detail-${kind}`, kind, o.id, o.id, person, (opt, cx) => this.changeDetail(kind, opt, cx)))));
     };
 
-    const header = v_flex().flex_none().px(18).pt(14).pb(14).gap(10).border_b(1).border_color(t.border)
-      .child(h_flex().items_center().gap(6)
-        // Opened from the board: back to it.
+    // The project and the actions on one row, then the title: clicking it shows the details.
+    const header = v_flex().flex_none().px(18).pt(6).pb(10).gap(2).border_b(1).border_color(t.border)
+      .child(h_flex().items_center().gap(2)
         .child(div().flex_1().min_w(0).text_size(11.5).text_color(t.dim).truncate()
           .child(`${this.ref.projectName ?? this.ref.project}${this.loading ? " · updating…" : ""}`))
+        .child(iconButton("view-respond", "mods/codebasehq/icons/reply.svg", (cx) => this.toggleResponse(cx),
+          this.reply.open ? t.accent : null, this.reply.open ? "Fold the response away (the text stays)" : "Post a response", this.reply.open))
         .child(iconButton("view-copy", this.copied ? "mods/codebasehq/check.svg" : "mods/codebasehq/copy.svg", (cx) => {
           cx.write_to_clipboard(`#${k.id} ${k.summary}`);
           this.copied = true;
@@ -677,15 +680,14 @@ export class Viewer {
           cx.notify();
         }, this.copied ? t.ansi2 : null, this.copied ? "Copied" : `Copy "#${k.id} ${k.summary}"`))
         .child(iconButton("view-open", "mods/codebasehq/external.svg", (cx) => openLink(cx, url), null, "Open in Codebase")))
-      .child(h_flex().gap(10).items_start()
-        .child(div().flex_none().text_size(17).font_semibold().text_color(t.muted).child(`#${k.id}`))
-        .child(div().flex_1().min_w(0).text_size(17).font_semibold().child(k.summary)))
-      .child(h_flex().id("details-toggle").ml(-6).px(6).h(24).gap(4).rounded(5).items_center()
-        .text_size(12).text_color(t.muted).hover((s) => s.bg(t.hover).text_color(t.foreground))
+      .child(h_flex().id("details-toggle").ml(-6).px(6).py(2).gap(6).rounded(5).items_start().cursor_pointer()
+        .text_size(15).font_semibold().hover((s) => s.bg(t.hover))
+        .tooltip(this.details ? "Hide the details" : "Show the details")
         .on_click((_e, cx) => { this.details = !this.details; cx.notify(); })
-        .child(svg(`mods/codebasehq/icons/chevron-${this.details ? "down" : "right"}.svg`).size(13).flex_none())
-        .child(div().child("Details")))
-      .when(this.details, (el) => el.child(v_flex().gap(2)
+        .child(svg(`mods/codebasehq/icons/chevron-${this.details ? "down" : "right"}.svg`).size(13).flex_none().mt(4).text_color(t.dim))
+        .child(div().flex_none().text_color(t.muted).child(`#${k.id}`))
+        .child(div().flex_1().min_w(0).child(k.summary)))
+      .when(this.details, (el) => el.child(v_flex().pt(6).gap(2)
         .children(["status", "priority", "type", "category", "assignee", "milestone"].map(detail))
         .child(field("Reported by", div().child(this.userName(k.reporterId, k.reporter))))
         .child(field("Created", div().child(`${dateText(k.created)} · updated ${ago(k.updated)} ago`)))));
@@ -765,6 +767,6 @@ export class Viewer {
         .when(Boolean(this.error), (el) => el.child(note(this.error, t.ansi1)))
         .when(notes.length === 0, (el) => el.child(note("No notes.")))
         .children(notes.map(noteView)))
-      .child(this.responseView(t, avatar));
+      .when(this.reply.open, (el) => el.child(this.responseView(t, avatar)));
   }
 }

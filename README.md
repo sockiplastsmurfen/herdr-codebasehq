@@ -33,7 +33,7 @@ A [Herdr](https://herdr.dev) mod for [Codebase HQ](https://www.codebasehq.com) t
   loads 60 tickets at a time; **Load more** at the bottom gets the next 60.
 - **Click a ticket's title** to see the whole ticket in a pane beside it: every field and
   every note (who, when, what changed, the text as Markdown, attachments). The fields are
-  folded under **Details**; click it to show them. Click status, priority, type, category,
+  folded away; click the ticket's title in the pane to show them. Click status, priority, type, category,
   assignee or milestone there to change it, as on a card in the list. Clicking another title
   shows that ticket in the same pane; clicking the shown one again closes it.
 - **Commits.** Notes made by commits (`[touch:123]`) show as commits: the author, the short
@@ -45,7 +45,8 @@ A [Herdr](https://herdr.dev) mod for [Codebase HQ](https://www.codebasehq.com) t
 - **Images** in notes: click to see the image in the pane, scaled to fit; the arrow icon opens
   it in the browser. They are downloaded through the API (`/uploads/<id>`) once and kept in
   `~/.config/herdr-app/data/codebasehq-images/`.
-- **Post a response** at the bottom of the ticket pane: a note in Markdown, posted with
+- **Post a response** (the speech-bubble icon in the ticket pane's header) opens a form at
+  the bottom: a note in Markdown, posted with
   **Post** or ⌘↩, with status, priority, type, category, assignee and milestone to change in
   the same note, as in Codebase's own form. Unsent text stays with its ticket.
 - **New ticket** (the **+** icon): subject, description (Markdown), status, priority, type,
