@@ -30,6 +30,7 @@ const WATCH = 1500;       // how often to look at which folder is focused (no ex
 const REFRESH = 120000;   // tickets
 const STALE = 60000;      // switching back to a project reloads it if older than this
 const BATCH = 3;          // pages (20 tickets each) loaded at a time; "Load more" gets the next ones
+const SHOWN = 60;         // cards drawn at a time: All projects can load hundreds, and drawing them all is slow
 const ALL = "*";          // the "project" that means every active project
 const PARALLEL = 8;       // requests at a time when asking every project
 const PROJECTS_DIR = "~/Sites"; // the default project folder: clones go there, checkouts are looked for there
@@ -196,7 +197,7 @@ export default class Tickets extends View {
   entryFor(project) {
     const key = `${project}\n${searchOf(this.filterFor(project))}`;
     let entry = this.cache.get(key);
-    if (!entry) { entry = { tickets: null, error: null, at: 0, loading: false, pages: 0, more: false }; this.cache.set(key, entry); }
+    if (!entry) { entry = { tickets: null, error: null, at: 0, loading: false, pages: 0, more: false, shown: SHOWN }; this.cache.set(key, entry); }
     return entry;
   }
 
@@ -866,11 +867,13 @@ export default class Tickets extends View {
       content = v_flex()
         .when(Boolean(entry.error), (el) => el.child(this.note(t, entry.error, t.ansi1)))
         .when(tickets.length === 0, (el) => el.child(this.note(t, "No tickets match the filter.")))
-        .children(tickets.map(card))
-        .when(entry.more || (entry.loading && tickets.length > 0), (el) => el.child(h_flex().px(10).pb(12).justify_center()
+        .children(tickets.slice(0, entry.shown).map(card))
+        .when(tickets.length > entry.shown, (el) => el.child(h_flex().px(10).pb(12).justify_center()
+          .child(this.button(t, "show-more", `Show more (${tickets.length - entry.shown} not shown)`, (cx) => { entry.shown += SHOWN; cx.notify(); }))))
+        .when(tickets.length <= entry.shown && (entry.more || (entry.loading && tickets.length > 0)), (el) => el.child(h_flex().px(10).pb(12).justify_center()
           .child(entry.loading
             ? div().text_size(12).text_color(t.dim).child("Loading…")
-            : this.button(t, "load-more", "Load more", (cx) => this.load(cx, false, true)))));
+            : this.button(t, "load-more", "Load more", (cx) => { entry.shown = tickets.length + SHOWN; this.load(cx, false, true); }))));
     }
 
     return v_flex().size_full().min_h(0)

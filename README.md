@@ -30,7 +30,8 @@ A [Herdr](https://herdr.dev) mod for [Codebase HQ](https://www.codebasehq.com) t
   Pick several values in one filter; **Any** clears it, **Reset** goes back to the default
   `assignee:me resolution:open`. The filter is sent to Codebase as a search (e.g.
   `assignee:me status:"In Progress",New resolution:open`) and remembered per project. The list
-  loads 60 tickets at a time; **Load more** at the bottom gets the next 60.
+  loads 60 tickets at a time; **Load more** at the bottom gets the next 60. It draws 60 cards at
+  a time too (All projects can load hundreds): **Show more** draws the next 60.
 - **Click a ticket's title** to see the whole ticket in a pane beside it: every field and
   every note (who, when, what changed, the text as Markdown, attachments). The fields are
   folded away; click the ticket's title in the pane to show them. Click status, priority, type, category,

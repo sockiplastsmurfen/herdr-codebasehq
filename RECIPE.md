@@ -17,7 +17,7 @@ Your Codebase HQ tickets in Herdr. A panel beside Files and Changes lists the ti
     - category (a tag and the name)
     - assignee (picture or initials badge and the name)
     - the age on the right ("25 min", "5 h", "3 d", "2 mo")
-  - **"Load more"** at the bottom when Codebase has more.
+  - **"Show more (N not shown)"** at the bottom when more is loaded than drawn: only 60 cards are drawn at a time, as All projects can load hundreds and drawing them all is too slow for a render. Then **"Load more"** when Codebase has more.
 - **The ticket pane** (a pane beside the focused one):
   - A compact header: the project name (11.5px) with Post a response (speech bubble, highlighted while the form is open), Copy and Open icons (26px) on the same row, then a chevron, `#id` and the summary at 15px semibold.
   - **The details**, folded by default: clicking the title (chevron and all) unfolds them. Unfolded they show rows with a 96px label column: Status, Priority, Type, Category, Assigned to, Milestone (always, "None" when unset), Reported by and Created ("2026-11-11 09:16 · updated 7 d ago").
