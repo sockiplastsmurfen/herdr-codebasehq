@@ -1,5 +1,5 @@
 // Codebase HQ: credentials in the macOS keychain, the API v3, and git remotes.
-import { exec } from "herdr";
+import { exec, home, readTextFile } from "herdr";
 
 export const API = "https://api3.codebasehq.com";
 const SERVICE = "herdr-codebasehq";
@@ -370,6 +370,72 @@ export async function findClone(cloneUrl, folders) {
 /** A local checkout of any of a project's repositories, looked for as findClone does. */
 export async function findProjectCheckout(project, folders) {
   return findCheckout(folders, (url) => parseRemote(url)?.project === project);
+}
+
+/**
+ * Clones a repository into <parent>/<name> (a leading ~ is the home folder) and returns that
+ * folder. Never asks: git can't prompt here, so ssh runs in batch mode and https doesn't ask
+ * for a password; both fail with git's message instead. git writes its progress to `log`,
+ * which is read every 250ms (`sleep` waits) and handed to `onProgress` (see cloneProgress).
+ */
+export async function cloneRepository(cloneUrl, parent, name, { log, sleep, onProgress } = {}) {
+  // Both come from the API and end up on git's command line, after "--".
+  if (!/^(git@|ssh:\/\/|https:\/\/)\S+$/.test(cloneUrl ?? "")) throw new Error("Codebase gave no clone URL for this repository.");
+  if (!/^[\w][\w.-]*$/.test(name ?? "")) throw new Error(`Not a folder name: ${name}`);
+  const dir = expandHome(parent);
+  if (!dir.startsWith("/")) throw new Error("Give the folder as a full path, or one starting with ~/.");
+  const dest = `${dir}/${name}`;
+  let done = false;
+  const running = exec("/bin/sh", ["-c",
+    '[ -e "$2" ] && { printf "%s already exists.\n" "$2" >&2; exit 3; }\n'
+    + 'mkdir -p "$(dirname "$3")"\n'
+    + 'GIT_TERMINAL_PROMPT=0 git -c core.sshCommand="ssh -o BatchMode=yes" clone --progress -- "$1" "$2" 2>"$3"\n'
+    + 'c=$?; cat "$3" >&2; rm -f "$3"; exit $c',
+    "sh", cloneUrl, dest, log], { timeout: 600000 }).finally(() => { done = true; });
+  while (log && sleep && onProgress && !done) {
+    await sleep(250);
+    const text = done ? null : await readTextFile(log).catch(() => null);
+    if (text) onProgress(cloneProgress(text));
+  }
+  const r = await running;
+  if (r.code !== 0) {
+    // git's own lines say why (ssh's, then "fatal:"), not its progress or the boilerplate after.
+    const why = (r.stderr ?? "").split(/[\r\n]+/).map((l) => l.trim())
+      .filter((l) => l && !PROGRESS_LINE.test(l) && !/^Cloning into/.test(l)).slice(0, 2).join(" ");
+    throw new Error(why ? `git clone failed: ${why}` : `git clone failed (exit ${r.code}).`);
+  }
+  return dest;
+}
+
+/** "~/<folder>" -> "<home>/<folder>", without a trailing slash; other paths as they are. */
+export function expandHome(path) {
+  const dir = (path ?? "").trim().replace(/(.)\/+$/, "$1");
+  return dir === "~" || dir.startsWith("~/") ? home() + dir.slice(1) : dir;
+}
+
+const PROGRESS_LINE = /^(?:remote:\s*)?([A-Za-z ]+):\s+(\d+)%/;
+// Where each of git's steps sits on the whole bar: [start, end] in percent.
+const CLONE_STEPS = {
+  "Enumerating objects": [0, 2], "Counting objects": [0, 2], "Compressing objects": [2, 8],
+  "Receiving objects": [8, 80], "Resolving deltas": [80, 95], "Updating files": [95, 100], "Checking out files": [95, 100],
+};
+
+/**
+ * git clone --progress output -> { step, percent (of the step), overall (0-100), detail }.
+ * git redraws its line with \r, so the last progress line is where it is now.
+ */
+export function cloneProgress(text) {
+  const lines = text.split(/[\r\n]+/).map((l) => l.trim()).filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const m = PROGRESS_LINE.exec(lines[i]);
+    if (!m) continue;
+    const step = m[1].trim(), percent = Number(m[2]);
+    const [from, to] = CLONE_STEPS[step] ?? [0, 0];
+    // "Receiving objects:  45% (123/456), 12.30 MiB | 4.50 MiB/s": the size and speed.
+    const detail = (/\),\s*(.+)$/.exec(lines[i])?.[1] ?? "").replace(/,?\s*done\.?$/, "") || null;
+    return { step, percent, overall: Math.round(from + (to - from) * percent / 100), detail };
+  }
+  return { step: "Connecting", percent: 0, overall: 0, detail: null };
 }
 
 /** The first checkout in the folders, or next to them, whose origin url passes `wanted`. */

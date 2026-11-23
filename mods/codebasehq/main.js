@@ -11,12 +11,12 @@
 // https://<account>.codebasehq.com, or your own domain) is kept in this mod's localStorage.
 // Neither is ever written to the mod's folder.
 import { View, div, svg } from "gpui-kit";
-import { v_flex, h_flex, InputState, Input, TextareaState, Textarea } from "gpui-base";
+import { v_flex, h_flex, InputState, Input, TextareaState, Textarea, Progress, ProgressTrack, ProgressIndicator } from "gpui-base";
 import { focused, spaces, panes, theme, checking, props, notify, run, shared, setShared, appHome, layout } from "herdr";
 import {
   loadCredentials, saveCredentials, forgetCredentials, accountOf, usernameOf,
   ticketPage, projects, repoOf, ticketUrl, ticketsUrl, ago, ApiError, defaultBase, normalizeBase, choices, updateTicket,
-  accountUsers, downloadAvatars, createTicket, findProjectCheckout,
+  accountUsers, downloadAvatars, createTicket, findProjectCheckout, repositories, cloneRepository, expandHome,
 } from "./codebase.js";
 import {
   TITLES, FIELDS, personBadge, wantPictures, CHANGED, copyId, announceChange,
@@ -32,6 +32,7 @@ const STALE = 60000;      // switching back to a project reloads it if older tha
 const BATCH = 3;          // pages (20 tickets each) loaded at a time; "Load more" gets the next ones
 const ALL = "*";          // the "project" that means every active project
 const PARALLEL = 8;       // requests at a time when asking every project
+const PROJECTS_DIR = "~/Sites"; // the default project folder: clones go there, checkouts are looked for there
 const REFRESH_ALL = 600000; // all projects means one request per project: refresh by itself less often
 const NOTICE = 20000;     // look for tickets changed elsewhere (Claude, Codebase's web UI): one request
 
@@ -67,7 +68,7 @@ export default class Tickets extends View {
     this.newest = new Map();    // project -> the newest ticket update seen by notice()
     this.folderRepos = new Map(); // "<machine>\n<folder>" -> repoOf() (null: not a Codebase repo)
     this.noticing = false;
-    this.view = "list";         // "list" | "picker" | "setup"
+    this.view = "list";         // "list" | "picker" | "setup" | "new" | "clone"
     this.cwd = undefined;
     this.repo = null;           // { root, remote: {account, project} | null }
     this.cache = new Map();     // project -> { tickets, error, at, loading }
@@ -91,6 +92,9 @@ export default class Tickets extends View {
     try { this.baseUrl = localStorage.getItem("baseUrl") || null; } catch { this.baseUrl = null; }
     this.base = InputState.new({ placeholder: "https://example.codebasehq.com" });
     this.base.on("submit", (_e, cx) => this.save(cx));
+    try { this.projectsDir = localStorage.getItem("projectsDir") || PROJECTS_DIR; } catch { this.projectsDir = PROJECTS_DIR; }
+    this.projectsDirInput = InputState.new({ placeholder: PROJECTS_DIR });
+    this.projectsDirInput.on("submit", (_e, cx) => this.save(cx));
     // The New ticket form.
     this.draft = null;          // { project, projectName, status, priority, type, category, assignee, menu, saving, error }
     this.summary = InputState.new({ placeholder: "Subject" });
@@ -101,6 +105,10 @@ export default class Tickets extends View {
     this.filter = InputState.new({ placeholder: "Filter projects" });
     this.filter.on("change", (_e, cx) => cx.notify());
     this.key.on("submit", (_e, cx) => this.save(cx));
+    // Cloning a project that has no checkout yet.
+    this.cloning = null;        // { project, projectName, repos, picked, busy, progress, error }
+    this.cloneDir = InputState.new({ placeholder: "Folder (empty: the default project folder)" });
+    this.cloneDir.on("submit", (_e, cx) => this.cloneProject(cx));
     this.saving = false;
     this.setupError = null;
 
@@ -329,10 +337,58 @@ export default class Tickets extends View {
       if (s) { run("space.select", { id: s.id }); await this.showListIn((x) => x.id === s.id, cx); return; }
       const local = spaces().filter((x) => !x.machine);
       const tabs = new Set(local.flatMap((x) => x.tabs.map((tab) => tab.id)));
-      const folders = [...local.map((x) => x.folder), ...panes().filter((x) => tabs.has(x.tab)).map((x) => x.cwd)];
+      const folders = [expandHome(this.projectsDir), ...local.map((x) => x.folder), ...panes().filter((x) => tabs.has(x.tab)).map((x) => x.cwd)];
       const folder = await findProjectCheckout(k.project, [...new Set(folders.filter(Boolean))]).catch(() => null);
       if (folder) { run("space.new", { folder }); await this.showListIn((x) => x.folder === folder, cx); }
-      else notify({ title: `No checkout of ${k.projectName ?? k.project}`, body: "No space works in it, and no clone of its repositories was found next to your spaces' folders.", level: "info" });
+      else this.openClone(k, cx);
+    });
+  }
+
+  /** No checkout of the project anywhere: offers to clone one of its repositories. */
+  openClone(k, cx) {
+    const c = { project: k.project, projectName: k.projectName ?? k.project, repos: null, picked: null, busy: false, error: null };
+    this.cloning = c;
+    this.view = "clone";
+    this.cloneDir.set_value(this.projectsDir);
+    cx.notify();
+    cx.spawn(async (cx) => {
+      try {
+        c.repos = await repositories(this.creds, c.project);
+        if (c.repos.length === 1) c.picked = c.repos[0].permalink;
+        if (!c.repos.length) c.error = "The project has no git repositories.";
+      } catch (e) { c.error = errText(e); }
+      cx.notify();
+    });
+  }
+
+  /** Clones the picked repository, then opens a space there with the list showing. */
+  cloneProject(cx) {
+    const c = this.cloning;
+    const repo = c?.repos?.find((r) => r.permalink === c.picked);
+    if (!c || c.busy) return;
+    if (!repo) { c.error = "Pick a repository first."; cx.notify(); return; }
+    const parent = this.cloneDir.value().trim() || this.projectsDir;
+    c.busy = true;
+    c.error = null;
+    c.progress = { step: "Connecting", percent: 0, overall: 0, detail: null };
+    cx.notify();
+    cx.spawn(async (cx) => {
+      try {
+        const folder = await cloneRepository(repo.cloneUrl, parent, repo.permalink, {
+          log: `${appHome()}/data/codebasehq-clone-${Date.now()}.log`,
+          sleep: (ms) => cx.sleep(ms),
+          onProgress: (p) => { c.progress = p; cx.notify(); },
+        });
+        if (this.cloning === c) { this.cloning = null; this.view = "list"; }
+        notify({ title: `Cloned ${repo.name}`, body: folder, level: "success" });
+        run("space.new", { folder });
+        await this.showListIn((x) => x.folder === folder, cx);
+      } catch (e) {
+        c.busy = false;
+        c.progress = null;
+        c.error = errText(e);
+      }
+      cx.notify();
     });
   }
 
@@ -566,6 +622,7 @@ export default class Tickets extends View {
     this.user.set_value(this.creds?.user ?? "");
     this.key.set_value("");
     this.base.set_value(this.baseUrl ?? "");
+    this.projectsDirInput.set_value(this.projectsDir);
     this.setupError = null;
     cx.notify();
   }
@@ -578,6 +635,8 @@ export default class Tickets extends View {
     if (!key) { this.setupError = "Paste the API key."; cx.notify(); return; }
     let base;
     try { base = normalizeBase(this.base.value()); } catch (e) { this.setupError = errText(e); cx.notify(); return; }
+    const projectsDir = this.projectsDirInput.value().trim().replace(/(.)\/+$/, "$1") || PROJECTS_DIR;
+    if (!/^(\/|~\/|~$)/.test(projectsDir)) { this.setupError = "Give the project folder as a full path, or one starting with ~/."; cx.notify(); return; }
     if (this.saving) return;
     this.saving = true;
     this.setupError = null;
@@ -587,6 +646,8 @@ export default class Tickets extends View {
         this.baseUrl = base;
         try { if (base) localStorage.setItem("baseUrl", base); else localStorage.removeItem("baseUrl"); } catch {}
         setShared("codebasehq.base", base);
+        this.projectsDir = projectsDir;
+        try { if (projectsDir !== PROJECTS_DIR) localStorage.setItem("projectsDir", projectsDir); else localStorage.removeItem("projectsDir"); } catch {}
         const changed = !this.creds || this.creds.user !== user || this.creds.key !== key;
         if (changed) {
           await saveCredentials(user, key);
@@ -652,6 +713,7 @@ export default class Tickets extends View {
       : this.view === "setup" ? this.renderSetup(t)
       : this.view === "picker" ? this.renderPicker(t)
       : this.view === "new" ? this.renderNew(t)
+      : this.view === "clone" && this.cloning ? this.renderClone(t)
       : this.renderList(t);
     return root.bg(t.surface).text_color(t.foreground).child(body);
   }
@@ -970,6 +1032,52 @@ export default class Tickets extends View {
         .child(this.link(t, "credentials", "Settings…", (cx) => this.openSetup(cx))));
   }
 
+  /** The clone's progress: git's step and a bar for the whole clone. */
+  cloneBar(t, p) {
+    return v_flex().pt(14).gap(6)
+      .child(h_flex().gap(8).text_size(11.5)
+        .child(div().flex_1().min_w(0).truncate().text_color(t.muted).child(p.percent ? `${p.step} ${p.percent}%` : `${p.step}…`))
+        .child(div().flex_none().text_color(t.dim).child(p.detail ?? "")))
+      .child(Progress.new("clone-progress").value(p.overall)
+        .child(ProgressTrack.new().w_full().h(6).rounded(3).bg(t.raised).border(1).border_color(t.border).overflow_hidden()
+          .child(ProgressIndicator.new().h_full().w(`${Math.max(2, p.overall)}%`).rounded(3).bg(t.accent))));
+  }
+
+  /** Which repository to clone, and where (see openClone). */
+  renderClone(t) {
+    const c = this.cloning;
+    const back = (cx) => { if (!c.busy) { this.cloning = null; this.view = "list"; cx.notify(); } };
+    const label = (text) => div().pt(14).pb(5).text_size(11.5).text_color(t.dim).child(text);
+    const picked = c.repos?.find((r) => r.permalink === c.picked);
+    const row = (r) => {
+      const on = r.permalink === c.picked;
+      return h_flex().id(`clone-${r.permalink}`).flex_none().px(8).py(6).gap(8).rounded(6).items_center()
+        .when(on, (el) => el.bg(t.selected)).hover((s) => s.bg(t.hover))
+        .on_click((_e, cx) => { if (!c.busy) { c.picked = r.permalink; c.error = null; cx.notify(); } })
+        .child(div().flex_none().size(12).rounded(6).border(1).border_color(on ? t.accent : t.input).bg(on ? t.accent : t.background))
+        .child(v_flex().flex_1().min_w(0)
+          .child(div().text_size(12.5).truncate().child(r.name))
+          .child(div().text_size(11).text_color(t.dim).truncate().child(r.cloneUrl ?? "No clone URL")));
+    };
+    const dir = (this.cloneDir.value().trim() || this.projectsDir).replace(/\/+$/, "");
+    return v_flex().size_full().min_h(0)
+      .child(this.header(t, "Clone", c.projectName, [this.button(t, "clone-back", "Back", back)]))
+      .child(v_flex().id("clone").flex_1().min_h(0).overflow_y_scrollbar().px(14).pt(6).pb(14)
+        .child(div().pt(8).text_size(12).text_color(t.muted)
+          .child(`No space works in ${c.projectName}, and there is no checkout of it next to your spaces' folders. Clone one of its repositories and open a space there.`))
+        .child(label("Repository"))
+        .when(!c.repos && !c.error, (el) => el.child(this.note(t, "Loading repositories…")))
+        .child(v_flex().gap(2).children((c.repos ?? []).map(row)))
+        .child(label("Clone into"))
+        .child(this.input(t, this.cloneDir))
+        .child(div().pt(5).text_size(11).text_color(t.dim).child(picked ? `The checkout goes in ${dir}/${picked.permalink}.` : "The checkout goes in a folder named after the repository."))
+        .when(Boolean(c.busy && c.progress), (el) => el.child(this.cloneBar(t, c.progress)))
+        .when(Boolean(c.error), (el) => el.child(div().pt(10).text_size(12).text_color(t.ansi1).child(c.error)))
+        .child(h_flex().pt(16).gap(8)
+          .child(this.button(t, "clone-run", c.busy ? "Cloning…" : "Clone and open", (cx) => this.cloneProject(cx), true))
+          .child(this.button(t, "clone-cancel", "Cancel", back))));
+  }
+
   renderSetup(t) {
     const fallback = defaultBase(this.account());
     let base = fallback;
@@ -993,6 +1101,9 @@ export default class Tickets extends View {
         .child(label("Codebase URL"))
         .child(input(this.base))
         .child(hint(`For ticket links. Empty: ${fallback}. Set your own domain if you have one.`))
+        .child(label("Default project folder"))
+        .child(input(this.projectsDirInput))
+        .child(hint(`Where projects are cloned, and where checkouts are looked for. Empty: ${PROJECTS_DIR}.`))
         .when(Boolean(this.setupError), (el) => el.child(div().pt(10).text_size(12).text_color(t.ansi1).child(this.setupError)))
         .child(h_flex().pt(16).gap(8)
           .child(this.button(t, "save", this.saving ? "Saving…" : "Save", (cx) => this.save(cx), true))

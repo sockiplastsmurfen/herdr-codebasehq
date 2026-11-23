@@ -14,7 +14,10 @@ A [Herdr](https://herdr.dev) mod for [Codebase HQ](https://www.codebasehq.com) t
   repo the default is **All projects**: every active project is asked (8 at a time) and the
   answers are merged, newest first, with the project's name on each card. Click the name to
   go to the space that works in that project, or to open one in a local checkout of it
-  (looked for in and next to your spaces' folders). The Tickets panel shows in that space. It refreshes by
+  (looked for in the default project folder, and in and next to your spaces' folders). Without
+  one, it lists the project's repositories: pick one and a folder (the default project folder)
+  and it is cloned there, with a progress bar. The
+  Tickets panel shows in that space. It refreshes by
   itself every 10 minutes instead of every 2.
 - **One card per ticket**, most recently updated first: number, summary and one
   row of details: status (name and colour), icons for priority (a flag in its colour) and
@@ -59,7 +62,8 @@ A [Herdr](https://herdr.dev) mod for [Codebase HQ](https://www.codebasehq.com) t
   one, else with their initials on a colour of their own.
 - **Credentials** (API username `account/username` and API key, from My Profile →
   API Credentials in Codebase) are entered in the panel the first time and kept in the
-  macOS keychain under the service `herdr-codebasehq`. Links in tickets open only if they are
+  macOS keychain under the service `herdr-codebasehq`. Settings also has the **default project
+  folder** (`~/Sites` unless you change it): where projects are cloned and checkouts looked for. Links in tickets open only if they are
   web (http/https) links.
 
 The mod calls `https://api3.codebasehq.com` and runs `git`, `security` (macOS), `curl`,
