@@ -684,7 +684,8 @@ export class Viewer {
           this.menuBox(t, `detail-${kind}`, kind, o.id, o.id, person, (opt, cx) => this.changeDetail(kind, opt, cx)))));
     };
 
-    // The project and the actions on one row, then the title: clicking it shows the details.
+    // The project and the pane's actions on one row; then the title (clicking it shows the
+    // details) with the ticket's own actions, Copy and Open, at its right as on a card in the list.
     const header = v_flex().flex_none().px(18).pt(6).pb(10).gap(2).border_b(1).border_color(t.border)
       .child(h_flex().items_center().gap(2)
         .child(div().flex_1().min_w(0).text_size(11.5).text_color(t.dim).truncate()
@@ -695,21 +696,23 @@ export class Viewer {
           cx.notify();
         }, null, "Go to the latest note"))
         .child(iconButton("view-respond", "mods/codebasehq/icons/reply.svg", (cx) => this.toggleResponse(cx),
-          this.reply.open ? t.accent : null, this.reply.open ? "Fold the response away (the text stays)" : "Post a response", this.reply.open))
-        .child(iconButton("view-copy", this.copied ? "mods/codebasehq/check.svg" : "mods/codebasehq/copy.svg", (cx) => {
-          cx.write_to_clipboard(`#${k.id} ${k.summary}`);
-          this.copied = true;
-          cx.timer.after(1500, (cx) => { this.copied = false; cx.notify(); });
-          cx.notify();
-        }, this.copied ? t.ansi2 : null, this.copied ? "Copied" : `Copy "#${k.id} ${k.summary}"`))
-        .child(iconButton("view-open", "mods/codebasehq/external.svg", (cx) => openLink(cx, url), null, "Open in Codebase")))
-      .child(h_flex().id("details-toggle").ml(-6).px(6).py(2).gap(6).rounded(5).items_start().cursor_pointer()
-        .text_size(15).font_semibold().hover((s) => s.bg(t.hover))
-        .tooltip(this.details ? "Hide the details" : "Show the details")
-        .on_click((_e, cx) => { this.details = !this.details; cx.notify(); })
-        .child(svg(`mods/codebasehq/icons/chevron-${this.details ? "down" : "right"}.svg`).size(13).flex_none().mt(4).text_color(t.dim))
-        .child(div().flex_none().text_color(t.muted).child(`#${k.id}`))
-        .child(div().flex_1().min_w(0).child(k.summary)))
+          this.reply.open ? t.accent : null, this.reply.open ? "Fold the response away (the text stays)" : "Post a response", this.reply.open)))
+      .child(h_flex().gap(6).items_start()
+        .child(h_flex().id("details-toggle").flex_1().min_w(0).ml(-6).px(6).py(2).gap(6).rounded(5).items_start().cursor_pointer()
+          .text_size(15).font_semibold().hover((s) => s.bg(t.hover))
+          .tooltip(this.details ? "Hide the details" : "Show the details")
+          .on_click((_e, cx) => { this.details = !this.details; cx.notify(); })
+          .child(svg(`mods/codebasehq/icons/chevron-${this.details ? "down" : "right"}.svg`).size(13).flex_none().mt(4).text_color(t.dim))
+          .child(div().flex_none().text_color(t.muted).child(`#${k.id}`))
+          .child(div().flex_1().min_w(0).child(k.summary)))
+        .child(h_flex().flex_none().gap(2).mr(-4)
+          .child(iconButton("view-copy", this.copied ? "mods/codebasehq/check.svg" : "mods/codebasehq/copy.svg", (cx) => {
+            cx.write_to_clipboard(`#${k.id} ${k.summary}`);
+            this.copied = true;
+            cx.timer.after(1500, (cx) => { this.copied = false; cx.notify(); });
+            cx.notify();
+          }, this.copied ? t.ansi2 : null, this.copied ? "Copied" : `Copy "#${k.id} ${k.summary}"`))
+          .child(iconButton("view-open", "mods/codebasehq/external.svg", (cx) => openLink(cx, url), null, "Open in Codebase"))))
       .when(this.details, (el) => el.child(v_flex().pt(6).gap(2)
         .children(["status", "priority", "type", "category", "assignee", "milestone"].map(detail))
         .child(field("Reported by", div().child(this.userName(k.reporterId, k.reporter))))
