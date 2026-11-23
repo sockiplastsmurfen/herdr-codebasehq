@@ -35,12 +35,20 @@ function el(tag) {
 export const div = () => el("div"), svg = (p) => el(`svg:${p}`), image = (p) => el(`img:${p}`), list = () => el("list");
 export const v_flex = () => el("v"), h_flex = () => el("h");
 
+// Text state: the value and the selection (a cursor at the end after set_value), and its handlers.
 class State {
-  constructor() { this.v = ""; }
+  constructor() { this.v = ""; this.sel = { start: 0, end: 0 }; this.handlers = {}; }
   static new() { return new State(); }
   value() { return this.v; }
-  set_value(v) { this.v = v; }
-  on() {} focus() {} set_masked() {} set_auto_grow() {}
+  set_value(v) { this.v = v; this.sel = { start: v.length, end: v.length }; }
+  selected_range() { return { ...this.sel }; }
+  set_selected_range(r) { this.sel = { ...r }; }
+  /** Replaces the selection, as typing would. */
+  replace(text) { this.v = this.v.slice(0, this.sel.start) + text + this.v.slice(this.sel.end); const at = this.sel.start + text.length; this.sel = { start: at, end: at }; }
+  on(event, handler) { this.handlers[event] = handler; return true; }
+  /** A test types: sets the value and runs the change handler (with this cx). */
+  type(v, cx) { this.set_value(v); this.handlers.change?.({}, cx); }
+  focus() {} set_masked() {} set_auto_grow() {}
 }
 export const InputState = State, TextareaState = State;
 export const Input = { new: () => el("input") }, Textarea = { new: () => el("textarea") };

@@ -70,7 +70,8 @@ A [Herdr](https://herdr.dev) mod for [Codebase HQ](https://www.codebasehq.com) t
 - **Post a response** (the speech-bubble icon in the ticket pane's header) opens a form at
   the bottom: a note in Markdown, posted with
   **Post** or ⌘↩, with status, priority, type, category, assignee and milestone to change in
-  the same note, as in Codebase's own form. Attach files with **Attach…** (the macOS file
+  the same note, as in Codebase's own form. Type `@` and the start of a name to mention someone: the project's people show under the
+  text, click one. Attach files with **Attach…** (the macOS file
   chooser) or by dropping them on the form from Finder. Unsent text stays with its ticket.
 - **New ticket** (the **+** icon): subject, description (Markdown), status, priority, type,
   category, assignee and milestone, filled in with the project's defaults. In All projects you

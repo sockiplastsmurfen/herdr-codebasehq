@@ -71,3 +71,14 @@ check("Save shows the new title at once", v.ticket.summary === "Checkout button 
 await settle(5);
 check("… and saves it as the change Codebase calls subject", world.saved.some((s) => s.kind === "update" && s.id === 118 && s.changes.subject === "Checkout button hidden by the cookie banner"), world.saved.at(-1));
 check("… and the field goes", v.titleEdit === null);
+
+// @ and the start of a name in a response offers the project's people.
+v.reply = v.replyFor(v.key); v.reply.open = true;
+v.response.type("Thanks @sa", cx);
+await settle(3);
+tree = v.render(t);
+check("@sa offers Sam Lee", Boolean(find(tree, "mention-sam")) && !find(tree, "mention-kim"), text(tree).slice(0, 200));
+click(tree, "mention-sam", cx);
+check("picking someone puts @username in the text", v.response.value() === "Thanks @sam " && !v.reply.mention, v.response.value());
+v.response.type("mail me@example.com", cx);
+check("an @ inside a word offers no one", !v.reply.mention);

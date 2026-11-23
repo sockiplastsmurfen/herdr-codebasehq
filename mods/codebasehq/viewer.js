@@ -218,6 +218,7 @@ export class Viewer {
     this.response = TextareaState.new({ placeholder: "Write a response (Markdown)", rows: 4 });
     this.response.set_auto_grow(4, 14);
     this.response.on("submit", (e, cx) => { if (e?.secondary) this.postResponse(cx); });
+    this.response.on("change", (_e, cx) => this.lookForMention(cx));
     this.start = null;          // the Start work form (startwork.js), for one ticket
     this.titleEdit = null;      // { key, saving, error } while the title is being changed
     this.titleInput = InputState.new({ placeholder: "Title" });
@@ -473,6 +474,40 @@ export class Viewer {
       .when(Boolean(e.error), (el) => el.child(div().text_size(12).text_color(t.ansi1).child(e.error)));
   }
 
+  /**
+   * "@" and the start of a name just before the cursor in the response: the project's people
+   * whose name or username has it are offered under the text (reply.mention).
+   */
+  lookForMention(cx) {
+    const r = this.reply, text = this.response.value();
+    const at = this.response.selected_range?.()?.start ?? text.length;
+    const m = /(^|[\s(,;:])@([\w.-]*)$/.exec(text.slice(0, at));
+    const next = m ? { start: at - m[2].length - 1, end: at, query: m[2].toLowerCase() } : null;
+    if (JSON.stringify(next) === JSON.stringify(r.mention ?? null)) return;
+    r.mention = next;
+    if (next) this.loadMeta(this.ref.project, cx);
+    cx.notify();
+  }
+
+  /** The people to offer for reply.mention: their name or username has it, at most 6. */
+  mentionOptions() {
+    const q = this.reply.mention?.query;
+    if (q === undefined) return [];
+    const users = (this.metas.get(this.ref?.project)?.users ?? []).filter((u) => u.username);
+    return users.filter((u) => !q || u.username.toLowerCase().includes(q) || (u.name ?? "").toLowerCase().includes(q)).slice(0, 6);
+  }
+
+  /** Puts "@username " in place of the "@…" typed, and goes on writing after it. */
+  pickMention(u, cx) {
+    const m = this.reply.mention;
+    if (!m) return;
+    this.response.set_selected_range({ start: m.start, end: m.end });
+    this.response.replace(`@${u.username} `);
+    this.reply.mention = null;
+    this.response.focus();
+    cx.notify();
+  }
+
   /** Adds files to the shown ticket's response (from the chooser, or dropped on the form). */
   attach(paths, cx) {
     const r = this.reply;
@@ -538,6 +573,14 @@ export class Viewer {
       .on_drop((e, cx) => this.attach(e.paths ?? [], cx))
       .child(Textarea.new(this.response).px(10).py(6).rounded(7).border(1).border_color(t.input)
         .bg(t.background).text_size(12.5).text_color(t.foreground))
+      .when(this.mentionOptions().length > 0, (el) => el.child(h_flex().flex_wrap().gap(6).items_center()
+        .child(div().flex_none().text_size(11).text_color(t.dim).child("Mention"))
+        .children(this.mentionOptions().map((u) => h_flex().id(`mention-${u.username}`).flex_none().h(24).px(7).gap(6).rounded(6)
+          .items_center().text_size(12).border(1).border_color(t.border).bg(t.surface).cursor_pointer().hover((s) => s.bg(t.hover))
+          .on_click((_e, cx) => this.pickMention(u, cx))
+          .child(person(u, 16))
+          .child(div().child(u.name))
+          .child(div().text_color(t.dim).child(`@${u.username}`))))))
       .when(r.files.length > 0, (el) => el.child(h_flex().flex_wrap().gap(6).children(r.files.map(file))))
       .child(h_flex().flex_wrap().gap(6).children(kinds.map(chip)))
       .when(Boolean(r.menu), (el) => el.child(menu(r.menu)))
