@@ -5,7 +5,7 @@
 import { div } from "gpui-kit";
 import { v_flex, h_flex, Input } from "gpui-base";
 import { panes, spaces, notify } from "herdr";
-import { repoOf, branchName, validBranch, startBranch, updateTicket, usernameOf } from "./codebase.js";
+import { repoOf, branchName, validBranch, startBranch, updateTicket, usernameOf, currentBranch, isTicketBranch } from "./codebase.js";
 import { errText, setField, announceChange, textButton } from "./ui.js";
 
 // A status that means work has started, by its name.
@@ -23,7 +23,9 @@ export function watchCheckouts(v, cx) {
   const shown = space?.tabs?.find((x) => x.active)?.id, tabs = new Set((space?.tabs ?? []).map((x) => x.id));
   const cwds = panes().filter((p) => p.cwd && tabs.has(p.tab)).sort((a, b) => (b.tab === shown) - (a.tab === shown)).map((p) => p.cwd);
   const folders = [...new Set([...cwds, space?.folder].filter(Boolean))];
-  const sig = `${space?.id}|${project}|${folders.join("|")}`;
+  // The terminals' branches too: switching branch shows or hides Start work.
+  const branches = panes().filter((p) => tabs.has(p.tab)).map((p) => p.branch ?? "").join(",");
+  const sig = `${space?.id}|${project}|${folders.join("|")}|${branches}`;
   if (sig === v.checkoutsSig) return;
   v.checkoutsSig = sig;
   // Only this computer's spaces: git runs here.
@@ -35,8 +37,11 @@ export function watchCheckouts(v, cx) {
       const repo = v.repos.get(folder);
       if (repo?.remote?.project === project && !roots.includes(repo.root)) roots.push(repo.root);
     }
+    const on = new Map();
+    for (const root of roots) on.set(root, await currentBranch(root));
     if (v.checkoutsSig !== sig) return;
     v.checkouts = roots;
+    v.checkoutBranches = on;
     if (v.start && !roots.includes(v.start.folder)) v.start.folder = roots[0] ?? null;
     cx.notify();
   });
@@ -68,8 +73,12 @@ export function toggleStartWork(v, cx) {
   cx.notify();
 }
 
-/** Whether Start work can show: the shown space has a checkout of the ticket's project. */
-export const canStartWork = (v) => Boolean(v.checkouts?.length);
+/**
+ * Whether Start work can show: the shown space has a checkout of the ticket's project, and none
+ * of them is on the ticket's branch already.
+ */
+export const canStartWork = (v) => Boolean(v.checkouts?.length)
+  && !v.checkouts.some((root) => isTicketBranch(v.checkoutBranches?.get(root), v.ref?.id));
 
 /** Start: checks the form, then does the work in a task of its own (the click's cx is only good during the click). */
 function start(v, cx) {

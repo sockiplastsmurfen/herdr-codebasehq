@@ -471,6 +471,15 @@ export function branchName(id, summary) {
   return name;
 }
 
+/** The branch a checkout is on, or null (a detached HEAD, or not a checkout). */
+export async function currentBranch(folder) {
+  const r = await exec("git", ["symbolic-ref", "--quiet", "--short", "HEAD"], { cwd: folder, timeout: 10000 }).catch(() => null);
+  return r?.code === 0 ? r.stdout.trim() || null : null;
+}
+
+/** Whether a branch is a ticket's: "583", "583-…" or "ticket-583", as noteCommits looks for them. */
+export const isTicketBranch = (branch, id) => new RegExp(`^(ticket-)?${Number(id)}(-|$)`).test(branch ?? "");
+
 /** Whether a branch name is one git takes, and can't be read as an option. */
 export const validBranch = (name) => /^[A-Za-z0-9][\w./-]*$/.test(name ?? "") && !/\.\.|\/\/|\/$|\.lock$|\.$/.test(name);
 

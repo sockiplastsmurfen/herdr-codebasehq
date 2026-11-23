@@ -44,7 +44,7 @@ A [Herdr](https://herdr.dev) mod for [Codebase HQ](https://www.codebasehq.com) t
   assignee or milestone there to change it, as on a card in the list. The arrow icon in its header
   scrolls to the latest note. Clicking another title shows that ticket in the same pane; clicking the shown one again closes it.
 - **Start work** (the branch icon by a ticket's title in the ticket pane, shown when the space
-  has a checkout of the ticket's project): a form with the branch, named after the ticket as
+  has a checkout of the ticket's project that isn't on the ticket's branch already): a form with the branch, named after the ticket as
   `583-drupal-11-i-november-december` (edit it if you like), the space's checkouts of the
   project to pick from (those the shown tab's terminals are in first), and what will
   change on the ticket: In Progress, and assigned to you if nobody has it. **Start** switches
