@@ -1,7 +1,7 @@
 // Codebase HQ: credentials in the macOS keychain, the API v3, and git remotes.
 import { exec, home, readTextFile } from "herdr";
 
-export const API = "https://api3.codebasehq.com";
+const API = "https://api3.codebasehq.com";
 const SERVICE = "herdr-codebasehq";
 
 // --- credentials -------------------------------------------------------------
@@ -112,7 +112,7 @@ function parseTicket(row) {
   };
 }
 
-export const PAGE_SIZE = 20;
+const PAGE_SIZE = 20;
 
 /**
  * One page (20) of tickets matching a Codebase search (e.g. "assignee:me resolution:open"),
@@ -174,7 +174,6 @@ export async function ticketDetail(creds, project, id) {
     milestone: t.milestone?.name ?? null,
     milestoneId: t.milestone_id ?? t.milestone?.id ?? null,
     created: Date.parse(t.created_at ?? "") || 0,
-    tags: t.tags ?? "",
   };
 }
 
@@ -281,7 +280,7 @@ export async function downloadAvatars(appHome, people) {
 // project's repositories (the ticket's branches first) and matched to notes by their message.
 
 /** A message as a note shows it: without [touch:…]-style references, line by line, trimmed. */
-export function plainMessage(text) {
+function plainMessage(text) {
   return (text ?? "").replace(/\r\n?/g, "\n").replace(/\[[a-z]+:[^\]]*\]/gi, "")
     .split("\n").map((l) => l.trim().replace(/\s+/g, " ")).join("\n").replace(/\n{2,}/g, "\n\n").trim();
 }
@@ -293,18 +292,18 @@ export async function repositories(creds, project) {
     .map((r) => ({ permalink: r.permalink, name: r.name ?? r.permalink, defaultBranch: r.default_branch ?? "master", cloneUrl: r.clone_url ?? null }));
 }
 
-export async function branches(creds, project, repo) {
+async function branches(creds, project, repo) {
   const data = (await get(creds, `/${encodeURIComponent(project)}/${encodeURIComponent(repo)}/branches`)) ?? [];
   return data.map((b) => (b.branch ?? b).name).filter(Boolean);
 }
 
-/** One page (20) of a branch's commits, newest first: [{ ref, short, message, author, authorEmail, at }] */
-export async function commitsPage(creds, project, repo, branch, page) {
+/** One page (20) of a branch's commits, newest first: [{ ref, short, message, author, at }] */
+async function commitsPage(creds, project, repo, branch, page) {
   const data = await get(creds, `/${encodeURIComponent(project)}/${encodeURIComponent(repo)}/commits/${encodeURIComponent(branch)}?page=${page}`);
   if (!Array.isArray(data)) return [];
   return data.map((c) => c.commit ?? c).map((c) => ({
     ref: c.ref, short: c.short_ref ?? (c.ref ?? "").slice(0, 10), message: c.message ?? "",
-    author: c.author_name ?? null, authorEmail: c.author_email ?? null,
+    author: c.author_name ?? null,
     at: Date.parse(c.committed_at ?? c.authored_at ?? "") || 0,
   }));
 }
@@ -356,7 +355,7 @@ export async function noteCommits(creds, project, ticketId, notes) {
 }
 
 /** "git@codebasehq.com:example/x/y.git" and "https://example.codebasehq.com/x/y.git" -> "example/x/y" */
-export function remoteKey(url) {
+function remoteKey(url) {
   return remoteParts(url)?.join("/").toLowerCase() ?? null;
 }
 
@@ -426,7 +425,7 @@ const CLONE_STEPS = {
  * git clone --progress output -> { step, percent (of the step), overall (0-100), detail }.
  * git redraws its line with \r, so the last progress line is where it is now.
  */
-export function cloneProgress(text) {
+function cloneProgress(text) {
   const lines = text.split(/[\r\n]+/).map((l) => l.trim()).filter(Boolean);
   for (let i = lines.length - 1; i >= 0; i--) {
     const m = PROGRESS_LINE.exec(lines[i]);
@@ -567,7 +566,7 @@ export const ticketsUrl = (base, project) => `${base}/projects/${project}/ticket
  *   ssh://git@codebasehq.com/example/website/website.git
  *   https://example.codebasehq.com/website/website.git
  */
-export function parseRemote(url) {
+function parseRemote(url) {
   const parts = remoteParts(url);
   return parts ? { account: parts[0], project: parts[1] } : null;
 }

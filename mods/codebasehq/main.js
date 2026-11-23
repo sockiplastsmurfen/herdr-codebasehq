@@ -15,12 +15,12 @@ import { v_flex, h_flex, InputState, Input, TextareaState, Textarea, Progress, P
 import { focused, spaces, panes, theme, checking, props, notify, run, shared, setShared, appHome, layout } from "herdr";
 import {
   loadCredentials, saveCredentials, forgetCredentials, accountOf, usernameOf,
-  ticketPage, projects, repoOf, ticketUrl, ticketsUrl, ago, ApiError, defaultBase, normalizeBase, choices, updateTicket,
-  accountUsers, downloadAvatars, createTicket, findProjectCheckout, repositories, cloneRepository, expandHome,
+  ticketPage, projects, repoOf, ticketUrl, ticketsUrl, ago, ApiError, defaultBase, normalizeBase, choices,
+  accountUsers, createTicket, findProjectCheckout, repositories, cloneRepository, expandHome,
 } from "./codebase.js";
 import {
   TITLES, FIELDS, personBadge, wantPictures, CHANGED, copyId, announceChange,
-  errText, openLink, iconLink, setField, fieldMark,
+  errText, openLink, iconLink, fieldMark, saveField, optionsMenu, textButton, textLink,
 } from "./ui.js";
 import { Viewer } from "./viewer.js";
 import { filterBar, searchOf } from "./filters.js";
@@ -222,13 +222,16 @@ export default class Tickets extends View {
     cx.notify();
     cx.spawn(async (cx) => {
       let list = more ? [...(entry.tickets ?? [])] : [];
+      const seen = new Set(list.map((k) => k.uid));
       const fresh = !entry.tickets;
       let page = first, hasMore = true;
       try {
         for (; page <= last && hasMore; page++) {
           const r = await ticketPage(this.creds, p.permalink, search, page);
-          const seen = new Set(list.map((k) => k.uid));
-          list = list.concat(r.tickets.map((k) => tag(k, p.permalink)).filter((k) => !seen.has(k.uid)));
+          // A ticket updated while paging can come twice.
+          const add = r.tickets.map((k) => tag(k, p.permalink)).filter((k) => !seen.has(k.uid));
+          for (const k of add) seen.add(k.uid);
+          list = list.concat(add);
           hasMore = r.more;
           if (fresh || more) { entry.tickets = list; cx.notify(); }
         }
@@ -344,6 +347,10 @@ export default class Tickets extends View {
   followRemote(root) {
     if (!root || !(root in this.chosen)) return;
     delete this.chosen[root];
+    this.saveChosen();
+  }
+
+  saveChosen() {
     try { localStorage.setItem("projects", JSON.stringify(this.chosen)); } catch {}
   }
 
@@ -455,7 +462,7 @@ export default class Tickets extends View {
     const p = this.project();
     const ids = (this.entryFor(p.permalink).tickets ?? []).map((k) => k.assigneeId);
     for (const m of this.meta.values()) for (const u of m.users ?? []) ids.push(u.id);
-    wantPictures(this, ids, cx, downloadAvatars, appHome());
+    wantPictures(this, ids, cx);
   }
 
   /**
@@ -509,7 +516,7 @@ export default class Tickets extends View {
         this.newest.set(project, Math.max(newest, before ?? 0));
         if (before !== undefined && newest > before) {
           const ids = tickets.filter((k) => k.updated > before).map((k) => k.id);
-          announceChange(setShared, this.me, project, ids);
+          announceChange(this.me, project, ids);
           this.reloadAll(cx);
         }
       } catch { /* the next look, or the refresh, catches it */ }
@@ -533,39 +540,27 @@ export default class Tickets extends View {
     });
   }
 
-  toggleMenu(project, k, kind, cx) {
+  toggleMenu(k, kind, cx) {
     const open = this.menu?.id === k.uid && this.menu.kind === kind;
     this.menu = open ? null : { id: k.uid, kind };
-    if (!open) this.loadChoices(project, cx);
+    if (!open) this.loadChoices(k.project, cx);
     cx.notify();
   }
 
-  change(project, k, kind, option, cx) {
+  /** Changes a field from a card; a ticket closed while the list shows open ones leaves it. */
+  change(k, kind, option, cx) {
     this.menu = null;
-    const f = FIELDS[kind];
-    if ((k[f.id] ?? null) === (option.id ?? null) || this.updating.has(k.uid)) { cx.notify(); return; }
-    // Show it at once; put it back if Codebase says no.
-    const before = setField(k, kind, option);
-    this.updating.add(k.uid);
-    cx.notify();
-    cx.spawn(async (cx) => {
-      try {
-        await updateTicket(this.creds, project, k.id, { [f.change]: option.id ?? "" });
-        announceChange(setShared, this.me, project, k.id);
-        k.updated = Date.now();
+    saveField(cx, {
+      creds: this.creds, from: this.me, project: k.project, k, kind, option, busy: this.updating, key: k.uid,
+      after: (ok) => {
         const shown = this.project().permalink;
-        if (kind === "status" && option.closed && this.filterFor(shown).resolution === "open") {
-          const entry = this.entryFor(shown);
-          if (entry?.tickets) entry.tickets = entry.tickets.filter((x) => x !== k);
-          notify({ title: `#${k.id} ${option.name}`, body: k.summary, level: "success", timeout: 4000 });
-        }
-      } catch (e) {
-        Object.assign(k, before);
-        notify({ title: `Could not change #${k.id}`, body: errText(e), level: "error", timeout: 10000 });
-      }
-      this.updating.delete(k.uid);
-      cx.notify();
+        if (!ok || kind !== "status" || !option.closed || this.filterFor(shown).resolution !== "open") return;
+        const entry = this.entryFor(shown);
+        if (entry?.tickets) entry.tickets = entry.tickets.filter((x) => x !== k);
+        notify({ title: `#${k.id} ${option.name}`, body: k.summary, level: "success", timeout: 4000 });
+      },
     });
+    cx.notify();
   }
 
   // --- new ticket ------------------------------------------------------------------
@@ -623,7 +618,7 @@ export default class Tickets extends View {
           category_id: id("category"), assignee_id: id("assignee"), milestone_id: id("milestone"),
         });
         notify({ title: `#${k.id} created`, body: summary, level: "success", timeout: 5000 });
-        announceChange(setShared, this.me, d.project, k.id);
+        announceChange(this.me, d.project, k.id);
         this.draft = null;
         this.view = "list";
         // The lists that may show it are out of date now.
@@ -651,7 +646,7 @@ export default class Tickets extends View {
     const key = this.choiceKey();
     if (permalink && permalink !== this.defaultProject()) this.chosen[key] = permalink;
     else delete this.chosen[key];
-    try { localStorage.setItem("projects", JSON.stringify(this.chosen)); } catch {}
+    this.saveChosen();
     this.view = "list";
     this.load(cx, false);
     cx.notify();
@@ -763,16 +758,11 @@ export default class Tickets extends View {
   }
 
   button(t, id, label, onClick, strong) {
-    return div().id(id).flex_none().px(10).h(24).rounded(6).flex().items_center().text_size(12)
-      .border(1).border_color(strong ? t.accent : t.border).bg(t.surface)
-      .text_color(strong ? t.accent : t.foreground)
-      .hover((s) => s.bg(t.hover)).on_click((_e, cx) => onClick(cx)).child(label);
+    return textButton(t, id, label, onClick, strong);
   }
 
   link(t, id, label, onClick) {
-    return div().id(id).flex_none().px(6).h(22).rounded(5).flex().items_center().text_size(12).text_color(t.muted)
-      .hover((s) => s.bg(t.hover).text_color(t.foreground))
-      .on_click((e, cx) => { cx.stop_propagation(); onClick(cx); }).child(label);
+    return textLink(t, id, label, onClick);
   }
 
   /** A framed icon button (the header's). Every icon button says what it does in a tooltip. */
@@ -838,7 +828,6 @@ export default class Tickets extends View {
         const f = FIELDS[kind];
         const open = this.menu?.id === k.uid && this.menu.kind === kind;
         const value = { id: k[f.id] ?? null, name: label(k, kind), colour: f.colour ? k[f.colour] : null, icon: f.icon ? k[f.icon] : null };
-        if (kind === "assignee" && value.id == null && !k.assignee) value.name = null;
         // Priority and type are icons only (hover for the value); the others show their name too.
         const text = kind === "status" || kind === "category" || kind === "assignee";
         return h_flex().id(`${kind}-${k.uid}`).flex_none().gap(5).h(22).rounded(5).items_center().justify_center()
@@ -846,25 +835,16 @@ export default class Tickets extends View {
           .text_size(11.5).text_color(open ? t.foreground : t.muted).when(open, (el) => el.bg(t.selected))
           .hover((s) => s.bg(t.hover).text_color(t.foreground))
           .tooltip(`${TITLES[kind]}: ${value.name ?? "Unassigned"}`)
-          .on_click((_e, cx) => this.toggleMenu(k.project, k, kind, cx))
+          .on_click((_e, cx) => this.toggleMenu(k, kind, cx))
           .child(mark(kind, value, 13))
           .when(text, (el) => el.child(div().min_w(0).truncate().child(value.name ?? "Unassigned")));
       };
       const menu = (k) => {
-        const kind = this.menu.kind, f = FIELDS[kind];
-        const meta = this.meta.get(k.project);
-        const head = div().px(6).pt(6).pb(2).text_size(11).text_color(t.dim).child(TITLES[kind]);
-        if (!meta || meta.loading) return v_flex().border_t(1).border_color(t.border).child(head).child(this.note(t, "Loading…"));
-        if (meta.error) return this.note(t, meta.error, t.ansi1);
-        const options = meta[f.list] ?? [];
-        const current = k[f.id] ?? null;
-        return v_flex().gap(1).border_t(1).border_color(t.border).child(head).children(options.map((o) =>
-          h_flex().id(`opt-${k.uid}-${o.id ?? "none"}`).h(26).px(6).gap(8).rounded(5).items_center().text_size(12)
-            .when(o.id === current, (el) => el.bg(t.selected)).hover((s) => s.bg(t.hover))
-            .on_click((_e, cx) => this.change(k.project, k, kind, o, cx))
-            .child(h_flex().w(16).flex_none().justify_center().child(mark(kind, o, 12)))
-            .child(div().flex_1().min_w(0).truncate().text_color(o.closed || o.id === null ? t.muted : t.foreground).child(o.name))
-            .when(Boolean(o.closed), (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child("closes")))));
+        const kind = this.menu.kind;
+        return div().pt(4).border_t(1).border_color(t.border).child(optionsMenu(t, {
+          id: `opt-${k.uid}-${kind}`, kind, meta: this.meta.get(k.project), picked: k[FIELDS[kind].id] ?? null,
+          person: this.person(t), pick: (o, cx) => this.change(k, kind, o, cx),
+        }));
       };
       const viewing = shownTicket();
       const card = (k) => {

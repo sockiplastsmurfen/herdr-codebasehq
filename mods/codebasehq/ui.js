@@ -1,5 +1,7 @@
 import { div, image, svg } from "gpui-kit";
-import { notify } from "herdr";
+import { v_flex, h_flex } from "gpui-base";
+import { notify, setShared, appHome } from "herdr";
+import { updateTicket, downloadAvatars } from "./codebase.js";
 
 // Small pieces the list, the board and the ticket view share.
 
@@ -52,6 +54,74 @@ export function setField(k, kind, option) {
   if (f.icon) k[f.icon] = option.icon ?? null;
   if (kind === "status") k.closed = Boolean(option.closed);
   return before;
+}
+
+/**
+ * Changes one field of a ticket: shows it at once (setField), saves it in Codebase as a note
+ * with the change and tells the other copies (from: this copy's copyId); puts it back with an
+ * error toast if Codebase says no. busy (a Set) holds key while it saves. after(ok, cx) runs
+ * when it is done, either way. Returns false when there is nothing to do (the same value, or
+ * still saving).
+ */
+export function saveField(cx, { creds, from, project, k, kind, option, busy, key = k.id, after }) {
+  const f = FIELDS[kind];
+  if ((k[f.id] ?? null) === (option.id ?? null) || busy.has(key)) return false;
+  const before = setField(k, kind, option);
+  k.updated = Date.now();
+  busy.add(key);
+  cx.spawn(async (cx) => {
+    let ok = true;
+    try {
+      await updateTicket(creds, project, k.id, { [f.change]: option.id ?? "" });
+      announceChange(from, project, k.id);
+    } catch (e) {
+      ok = false;
+      Object.assign(k, before);
+      notify({ title: `Could not change #${k.id}`, body: errText(e), level: "error", timeout: 10000 });
+    }
+    busy.delete(key);
+    after?.(ok, cx);
+    cx.notify();
+  });
+  return true;
+}
+
+/**
+ * The values a field can be set to (a project's choices(), or { loading } / { error }), to
+ * pick from: picked is highlighted, now (the ticket's own, when another is picked) says so, and
+ * statuses that close a ticket say "closes". pick(option, cx). The caller frames it.
+ */
+export function optionsMenu(t, { id, kind, meta, picked, now = picked, person, pick }) {
+  const box = v_flex().gap(1).child(div().px(6).pt(2).pb(2).text_size(11).text_color(t.dim).child(TITLES[kind]));
+  if (!meta || meta.loading || meta.error) {
+    return box.child(div().p(8).text_size(12).text_color(meta?.error ? t.ansi1 : t.dim).child(meta?.error ?? "Loading…"));
+  }
+  return box.child(v_flex().id(`${id}-options`).max_h(220).overflow_y_scrollbar().children((meta[FIELDS[kind].list] ?? []).map((o) =>
+    h_flex().id(`${id}-${o.id ?? "none"}`).h(26).px(6).gap(8).rounded(5).items_center().text_size(12).cursor_pointer()
+      .when((o.id ?? null) === picked, (el) => el.bg(t.selected)).hover((s) => s.bg(t.hover))
+      .on_click((_e, cx) => pick(o, cx))
+      .child(h_flex().w(18).flex_none().justify_center().child(fieldMark(t, kind, o, 12, person)))
+      .child(div().flex_1().min_w(0).truncate().text_color(o.id == null || o.closed ? t.muted : t.foreground).child(o.name))
+      .when((o.id ?? null) === now && now !== picked, (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child("now")))
+      .when(Boolean(o.closed), (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child("closes"))))));
+}
+
+/** A note in a pane (Loading…, an error, nothing to show). */
+export const paneNote = (t, text, color) => div().p(16).text_size(12.5).text_color(color ?? t.dim).child(text);
+
+/** A framed text button; strong is the accent one. */
+export function textButton(t, id, label, onClick, strong = false, height = 24) {
+  return div().id(id).flex_none().px(10).h(height).rounded(6).flex().items_center().text_size(12)
+    .border(1).border_color(strong ? t.accent : t.border).bg(t.surface)
+    .text_color(strong ? t.accent : t.foreground)
+    .hover((s) => s.bg(t.hover)).on_click((_e, cx) => onClick(cx)).child(label);
+}
+
+/** A small text link (Settings…, Any, Reset); a click on it goes no further. */
+export function textLink(t, id, label, onClick) {
+  return div().id(id).flex_none().px(6).h(22).rounded(5).flex().items_center().text_size(12).text_color(t.muted)
+    .hover((s) => s.bg(t.hover).text_color(t.foreground))
+    .on_click((_e, cx) => { cx.stop_propagation(); onClick(cx); }).child(label);
 }
 
 /**
@@ -117,7 +187,7 @@ export function personBadge(t, name, size, picture) {
  * Keeps people's pictures for a view: owner.people (from accountUsers) says who has one,
  * owner.pictures (Map id -> path | null) what has been downloaded. Asks only for the new ones.
  */
-export function wantPictures(owner, ids, cx, download, home) {
+export function wantPictures(owner, ids, cx) {
   if (!owner.people) return;
   owner.picturesAsked ??= new Set();
   const list = [...new Set(ids)].filter((id) => id != null && !owner.picturesAsked.has(id) && owner.people.avatars.has(id));
@@ -125,7 +195,7 @@ export function wantPictures(owner, ids, cx, download, home) {
   for (const id of list) owner.picturesAsked.add(id);
   cx.spawn(async (cx) => {
     try {
-      const got = await download(home, list.map((id) => ({ id, url: owner.people.avatars.get(id) })));
+      const got = await downloadAvatars(appHome(), list.map((id) => ({ id, url: owner.people.avatars.get(id) })));
       for (const [id, path] of got) owner.pictures.set(id, path);
     } catch { /* initials stay */ }
     cx.notify();
@@ -139,7 +209,7 @@ let copies = 0;
 /** A token for this copy, so it can skip its own announcements. */
 export const copyId = () => `copy-${Date.now()}-${++copies}`;
 /** Tells the other copies that a ticket (or several: an array of ids) in a project changed. */
-export function announceChange(setShared, from, project, id) {
+export function announceChange(from, project, id) {
   const ids = [].concat(id);
   setShared(CHANGED, { from, project, id: ids[0], ids, at: Date.now() });
 }

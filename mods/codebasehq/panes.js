@@ -8,9 +8,11 @@ import { spaces, panes, run, shared, setShared } from "herdr";
 
 export const OPEN = "codebasehq.open", BOARD = "codebasehq.board", PANES = "codebasehq.panes";
 
+const activeTab = () => spaces().find((s) => s.active)?.tabs?.find((x) => x.active)?.id;
+
 /** The ticket pane ("ticket") or board pane ("kanban") in the shown tab, if there is one. */
 export function viewerPane(kind) {
-  const tab = spaces().find((s) => s.active)?.tabs?.find((x) => x.active)?.id;
+  const tab = activeTab();
   const known = shared(PANES) ?? {};
   // (A pane opened before panes were noted isn't either: the buttons open new ones.)
   return panes().find((x) => x.mod === "codebasehq" && x.tab === tab && known[x.pane] === kind) ?? null;
@@ -22,12 +24,11 @@ export function viewerPane(kind) {
  * unzoomed first.
  */
 export function openViewer(kind, ref, cx) {
-  const tab = spaces().find((s) => s.active)?.tabs?.find((x) => x.active)?.id;
+  const tab = activeTab();
   const zoomed = panes().find((x) => x.tab === tab && x.zoomed);
   if (zoomed) run("pane.zoom", { pane: zoomed.pane });
   const before = new Set(panes().filter((x) => x.mod === "codebasehq").map((x) => x.pane));
-  const { view: _v, ...rest } = ref;
-  run("pane.split", { direction: "right", mod: "codebasehq", props: { ...rest, view: kind } });
+  run("pane.split", { direction: "right", mod: "codebasehq", props: { ...ref, view: kind } });
   let tries = 0;
   const note = (cx) => {
     const added = panes().find((x) => x.mod === "codebasehq" && !before.has(x.pane));

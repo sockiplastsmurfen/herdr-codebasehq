@@ -8,17 +8,18 @@
 //   details picked under it (status, priority, type, category, assignee, milestone); ⌘↩ posts too.
 import { div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, TextView, TextareaState, Textarea, ScrollHandle } from "gpui-base";
-import { props, shared, setShared, checking, settings, spaces, appHome, notify } from "herdr";
+import { props, shared, checking, settings, spaces, appHome } from "herdr";
 import {
   loadCredentials, accountOf, ticketDetail, ticketNotes, accountUsers, ticketUrl, defaultBase, ago,
-  noteCommits, commitUrl, findClone, commitDiff, uploadId, downloadUpload,
-  downloadAvatars, postNote, choices, updateTicket,
+  noteCommits, commitUrl, findClone, commitDiff, uploadId, downloadUpload, postNote, choices,
 } from "./codebase.js";
 import {
-  TITLES, FIELDS, personColour, personBadge, wantPictures, CHANGED, copyId, announceChange, changeIsAbout, errText, openLink, iconLink, fieldMark, setField,
+  TITLES, FIELDS, personColour, personBadge, wantPictures, CHANGED, copyId, announceChange, changeIsAbout, errText, openLink,
+  iconLink, fieldMark, saveField, optionsMenu, paneNote, textButton,
 } from "./ui.js";
 import { fetchBoard, boardView } from "./kanban.js";
-import { NO_FILTER, searchOf } from "./filters.js";
+import { NO_FILTER } from "./filters.js";
+import { OPEN, BOARD } from "./panes.js";
 
 const CHECK = 300;        // look at what to show (no request unless it changed)
 const REFRESH = 60000;    // new notes
@@ -193,7 +194,6 @@ export class Viewer {
     this.diffs = new Map();     // commit ref -> { open, loading, rows (diffRows), error, limit } for the opened commits
     this.clones = new Map();    // clone url -> local folder (or null: none here)
     this.images = new Map();    // upload id -> { open, loading, path, width, height, error }
-    this.people = null;         // = this.users once loaded (wantPictures reads it)
     try { this.boardFilters = JSON.parse(localStorage.getItem("boardFilters") ?? "{}") ?? {}; } catch { this.boardFilters = {}; }
     this.boardFilterMenu = null; // the board filter whose values are open
     this.pictures = new Map();  // user id -> picture path (or null: initials)
@@ -201,12 +201,11 @@ export class Viewer {
     this.looking = false;       // looking the commits up
     this.error = null;
     this.loading = false;
-    this.boardAgain = false;    // the board's filter changed while it loaded: load it again
     this.copied = false;
     this.details = false;       // the fields are folded away until the ticket's title is clicked
     this.detailMenu = null;     // the detail whose values are open under it
-    this.savingDetail = null;   // { key, kind } while a changed detail is saved
-    this.loadAgain = false;     // a response was posted while the ticket loaded: load it again
+    this.savingDetails = new Set(); // "<key>/<kind>" of the details being saved
+    this.loadAgain = false;     // something changed while it loaded (a post, a filter, another copy): load again
     // Post a response, per ticket (see replyFor): what is being written stays with its ticket.
     this.replies = new Map();   // "<project>-<id>" -> reply
     this.reply = this.replyFor(null);
@@ -231,13 +230,18 @@ export class Viewer {
     if (!c?.at || c.at <= this.seenChange) return;
     this.seenChange = c.at;
     if (c.from === this.me || !this.ref || c.project !== this.ref.project) return;
-    if (this.ref.view === "kanban" || changeIsAbout(c, this.ref.id)) this.load(cx);
+    if (this.ref.view === "kanban" || changeIsAbout(c, this.ref.id)) this.reload(cx);
+  }
+
+  /** wantPictures reads the account's people from here. */
+  get people() {
+    return this.users;
   }
 
   /** What to show: a ticket ({project, id}) or a project's board ({view: "kanban", project}). */
   wanted() {
     const board = props()?.view === "kanban";
-    const s = shared(board ? "codebasehq.board" : "codebasehq.open");
+    const s = shared(board ? BOARD : OPEN);
     if (board && s?.project) return { ...s, view: "kanban" };
     if (!board && s?.project && s?.id) return s;
     // Nothing shared (yet): what the pane was opened with.
@@ -273,31 +277,39 @@ export class Viewer {
     const ref = this.ref;
     if (!ref || !this.creds || this.loading) return;
     this.loading = true;
-    if (ref.view === "kanban") return this.loadBoard(ref, cx);
     cx.spawn(async (cx) => {
-      try {
-        const [ticket, notes, users] = await Promise.all([
-          ticketDetail(this.creds, ref.project, ref.id),
-          ticketNotes(this.creds, ref.project, ref.id),
-          this.users ?? accountUsers(this.creds).catch(NO_USERS),
-        ]);
-        this.users = users;
-        if (this.ref === ref) {
-          this.ticket = ticket; this.notes = notes; this.error = null;
-          this.loadMeta(ref.project, cx);
-          this.findCommits(ref, notes, cx);
-          // Pictures for the people shown: note authors, the assignee, the reporter.
-          this.people = users;
-          wantPictures(this, [...notes.map((n) => n.userId), ticket.assigneeId, ticket.reporterId], cx, downloadAvatars, appHome());
-        }
-      } catch (e) {
-        if (this.ref === ref) this.error = errText(e);
-      }
+      // The account's people, asked once (with the first load).
+      const users = this.users ? Promise.resolve(this.users) : accountUsers(this.creds).catch(NO_USERS);
+      if (ref.view === "kanban") await this.loadBoard(ref, users, cx);
+      else await this.loadTicket(ref, users, cx);
       this.loading = false;
-      // Another ticket was picked while this one loaded, or a response was posted: load again.
+      // Another ticket or board was picked while this loaded, or a reload was asked for: load again.
       if (this.ref !== ref || this.loadAgain) { this.loadAgain = false; this.load(cx); }
       cx.notify();
     });
+  }
+
+  /** Loads again now, or as soon as the load under way is done. */
+  reload(cx) {
+    if (this.loading) this.loadAgain = true; else this.load(cx);
+  }
+
+  async loadTicket(ref, users, cx) {
+    try {
+      const [ticket, notes] = await Promise.all([
+        ticketDetail(this.creds, ref.project, ref.id),
+        ticketNotes(this.creds, ref.project, ref.id),
+        users.then((u) => { this.users = u; }),
+      ]);
+      if (this.ref !== ref) return;
+      this.ticket = ticket; this.notes = notes; this.error = null;
+      this.loadMeta(ref.project, cx);
+      this.findCommits(ref, notes, cx);
+      // Pictures for the people shown: note authors, the assignee, the reporter.
+      wantPictures(this, [...notes.map((n) => n.userId), ticket.assigneeId, ticket.reporterId], cx);
+    } catch (e) {
+      if (this.ref === ref) this.error = errText(e);
+    }
   }
 
   /**
@@ -336,7 +348,7 @@ export class Viewer {
       try { Object.assign(entry, await choices(this.creds, project)); }
       catch (e) { entry.error = errText(e); }
       entry.loading = false;
-      wantPictures(this, (entry.users ?? []).map((u) => u.id), cx, downloadAvatars, appHome());
+      wantPictures(this, (entry.users ?? []).map((u) => u.id), cx);
       cx.notify();
     });
   }
@@ -376,9 +388,9 @@ export class Viewer {
     cx.spawn(async (cx) => {
       try {
         await postNote(this.creds, ref.project, ref.id, content, changes);
-        announceChange(setShared, this.me, ref.project, ref.id);
+        announceChange(this.me, ref.project, ref.id);
         this.clearReply(key);
-        if (this.key === key) { if (this.loading) this.loadAgain = true; else this.load(cx); }
+        if (this.key === key) this.reload(cx);
       } catch (e) {
         reply.posting = false;
         reply.error = errText(e);
@@ -394,10 +406,7 @@ export class Viewer {
   responseView(t, avatar) {
     const r = this.reply;
     const person = (o, size) => avatar(o.name, size, o.id);
-    const button = (id, label, onClick, strong) => div().id(id).flex_none().px(10).h(26).rounded(6).flex().items_center()
-      .text_size(12).border(1).border_color(strong ? t.accent : t.border).bg(t.surface)
-      .text_color(strong ? t.accent : t.foreground).hover((s) => s.bg(t.hover))
-      .on_click((_e, cx) => onClick(cx)).child(label);
+    const button = (id, label, onClick, strong) => textButton(t, id, label, onClick, strong, 26);
     const bar = v_flex().flex_none().px(18).py(12).gap(8).border_t(1).border_color(t.border);
 
     const kinds = ["status", "priority", "type", "category", "assignee", "milestone"];
@@ -415,7 +424,7 @@ export class Viewer {
     };
     const menu = (kind) => {
       const now = this.currentValue(kind).id;
-      return this.optionsMenu(t, `reply-${kind}`, kind, (r.changes[kind] ?? this.currentValue(kind)).id ?? null, now, person, (o, cx) => {
+      return this.menuBox(t, `reply-${kind}`, kind, (r.changes[kind] ?? this.currentValue(kind)).id ?? null, now, person, (o, cx) => {
         if ((o.id ?? null) === now) delete r.changes[kind]; else r.changes[kind] = o;
         r.menu = null;
         cx.notify();
@@ -437,49 +446,27 @@ export class Viewer {
         .child(div().flex_none().text_size(11).text_color(t.dim).child("⌘↩ posts")));
   }
 
-  /**
-   * The values a detail can be set to (the project's, from loadMeta), under the detail:
-   * picked is highlighted, now (the ticket's value, if it isn't the picked one) says so,
-   * statuses that close the ticket say so. pick(option, cx).
-   */
-  optionsMenu(t, id, kind, picked, now, person, pick) {
-    const meta = this.metas.get(this.ref.project), f = FIELDS[kind];
-    const box = v_flex().p(4).gap(1).rounded(8).border(1).border_color(t.border).bg(t.raised)
-      .child(div().px(6).pt(2).pb(2).text_size(11).text_color(t.dim).child(TITLES[kind]));
-    if (!meta || meta.loading || meta.error) {
-      return box.child(div().p(8).text_size(12).text_color(meta?.error ? t.ansi1 : t.dim).child(meta?.error ?? "Loading…"));
-    }
-    return box.child(v_flex().id(`${id}-options`).max_h(220).overflow_y_scrollbar().children((meta[f.list] ?? []).map((o) =>
-      h_flex().id(`${id}-${o.id ?? "none"}`).h(26).px(6).gap(8).rounded(5).items_center().text_size(12).cursor_pointer()
-        .when((o.id ?? null) === picked, (el) => el.bg(t.selected)).hover((s) => s.bg(t.hover))
-        .on_click((_e, cx) => pick(o, cx))
-        .child(h_flex().w(18).flex_none().justify_center().child(fieldMark(t, kind, o, 12, person)))
-        .child(div().flex_1().min_w(0).truncate().text_color(o.id == null || o.closed ? t.muted : t.foreground).child(o.name))
-        .when((o.id ?? null) === now && now !== picked, (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child("now")))
-        .when(Boolean(o.closed), (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child("closes"))))));
+  /** The values a detail can be set to (optionsMenu, with the project's values), in a box under it. */
+  menuBox(t, id, kind, picked, now, person, pick) {
+    return div().p(4).rounded(8).border(1).border_color(t.border).bg(t.raised)
+      .child(optionsMenu(t, { id, kind, meta: this.metas.get(this.ref.project), picked, now, person, pick }));
   }
 
   /** Changes a detail of the shown ticket at once, then in Codebase (a note with the change); back if that fails. */
   changeDetail(kind, option, cx) {
     const k = this.ticket, ref = this.ref, key = this.key;
     this.detailMenu = null;
-    if (!k || this.savingDetail || (option.id ?? null) === this.currentValue(kind).id) { cx.notify(); return; }
-    const before = setField(k, kind, option);
-    this.savingDetail = { key, kind };
-    cx.notify();
-    cx.spawn(async (cx) => {
-      try {
-        await updateTicket(this.creds, ref.project, ref.id, { [FIELDS[kind].change]: option.id ?? "" });
-        announceChange(setShared, this.me, ref.project, ref.id);
+    const now = k ? this.currentValue(kind).id : null;
+    if (k && (option.id ?? null) !== now) {
+      // A milestone the ticket names without its id has it now, so saveField sees the change.
+      if (kind === "milestone") k.milestoneId ??= now;
+      saveField(cx, {
+        creds: this.creds, from: this.me, project: ref.project, k, kind, option, busy: this.savingDetails, key: `${key}/${kind}`,
         // The change shows as a note too.
-        if (this.key === key) { if (this.loading) this.loadAgain = true; else this.load(cx); }
-      } catch (e) {
-        Object.assign(k, before);
-        notify({ title: `Could not change #${ref.id}`, body: errText(e), level: "error", timeout: 10000 });
-      }
-      this.savingDetail = null;
-      cx.notify();
-    });
+        after: (ok, cx) => { if (ok && this.key === key) this.reload(cx); },
+      });
+    }
+    cx.notify();
   }
 
   /** The board's filter for a project: nothing picked unless chosen (filters.js). */
@@ -490,35 +477,22 @@ export class Viewer {
   setBoardFilter(project, f, cx) {
     this.boardFilters[project] = f;
     try { localStorage.setItem("boardFilters", JSON.stringify(this.boardFilters)); } catch {}
-    // Reload now, or as soon as the load under way is done.
-    if (this.loading) this.boardAgain = true; else this.load(cx);
+    this.reload(cx);
     cx.notify();
   }
 
-  loadBoard(ref, cx) {
-    const filter = this.boardFilter(ref.project);
-    cx.spawn(async (cx) => {
-      try {
-        const [board, users] = await Promise.all([
-          fetchBoard(this.creds, ref.project, filter),
-          this.users ?? accountUsers(this.creds).catch(NO_USERS),
-        ]);
-        this.users = users;
-        this.people = users;
-        if (this.ref === ref) {
-          this.board = { project: ref.project, ...board, error: null };
-          wantPictures(this, board.tickets.map((k) => k.assigneeId), cx, downloadAvatars, appHome());
-        }
-      } catch (e) {
-        if (this.ref === ref) this.board = { project: ref.project, ...(this.board ?? {}), error: errText(e) };
-      }
-      this.loading = false;
-      // The filter changed while this loaded, or another view was picked: load again.
-      const again = this.boardAgain || searchOf(this.boardFilter(ref.project)) !== searchOf(filter);
-      this.boardAgain = false;
-      if (this.ref !== ref || again) this.load(cx);
-      cx.notify();
-    });
+  async loadBoard(ref, users, cx) {
+    try {
+      const [board] = await Promise.all([
+        fetchBoard(this.creds, ref.project, this.boardFilter(ref.project)),
+        users.then((u) => { this.users = u; }),
+      ]);
+      if (this.ref !== ref) return;
+      this.board = { project: ref.project, ...board, error: null };
+      wantPictures(this, board.tickets.map((k) => k.assigneeId), cx);
+    } catch (e) {
+      if (this.ref === ref) this.board = { project: ref.project, ...(this.board ?? {}), error: errText(e) };
+    }
   }
 
   /** Which notes came from commits: looked up after the notes show, as it takes a few requests. */
@@ -532,7 +506,7 @@ export class Viewer {
         const found = await noteCommits(this.creds, ref.project, ref.id, fresh);
         if (this.ref === ref) {
           for (const [id, c] of found) this.commits.set(id, c);
-          wantPictures(this, [...found.values()].map((c) => this.users?.idByName?.get((c.author ?? "").toLowerCase())), cx, downloadAvatars, appHome());
+          wantPictures(this, [...found.values()].map((c) => this.users?.idByName?.get((c.author ?? "").toLowerCase())), cx);
           for (const n of fresh) this.checked.add(n.id);
         }
       } catch { /* the notes still show as notes */ }
@@ -658,7 +632,7 @@ export class Viewer {
   render(t) {
     const root = v_flex().id("ticket-view").size_full().min_h(0).bg(t.surface).text_color(t.foreground)
       .on_size_change((size, cx) => { if (Math.abs(size.width - this.width) > 1) { this.width = size.width; cx.notify(); } });
-    const note = (text, color) => div().p(16).text_size(12.5).text_color(color ?? t.dim).child(text);
+    const note = (text, color) => paneNote(t, text, color);
     // A person's badge: their picture when they have one (by id, or found by name for commit
     // authors), else initials.
     const avatar = (name, size, id) => {
@@ -685,7 +659,7 @@ export class Viewer {
     const person = (o, size) => avatar(o.name, size, o.id);
     const detail = (kind) => {
       const o = this.currentValue(kind), open = this.detailMenu === kind;
-      const saving = this.savingDetail?.key === this.key && this.savingDetail?.kind === kind;
+      const saving = this.savingDetails.has(`${this.key}/${kind}`);
       return v_flex()
         .child(h_flex().id(`detail-${kind}`).ml(-6).px(6).gap(8).min_h(24).rounded(5).items_center().cursor_pointer()
           .when(open, (el) => el.bg(t.selected)).hover((s) => s.bg(t.hover))
@@ -697,7 +671,7 @@ export class Viewer {
             .child(div().min_w(0).truncate().text_color(o.id == null ? t.dim : t.foreground).child(o.name ?? "—")))
           .when(saving, (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child("Saving…"))))
         .when(open, (el) => el.child(div().pt(4).pb(6).child(
-          this.optionsMenu(t, `detail-${kind}`, kind, o.id, o.id, person, (opt, cx) => this.changeDetail(kind, opt, cx)))));
+          this.menuBox(t, `detail-${kind}`, kind, o.id, o.id, person, (opt, cx) => this.changeDetail(kind, opt, cx)))));
     };
 
     // The project and the actions on one row, then the title: clicking it shows the details.

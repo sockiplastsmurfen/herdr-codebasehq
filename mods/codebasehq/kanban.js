@@ -7,9 +7,8 @@
 //   mouse down / move / up: the card follows the pointer, the column under it lights up.
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { notify, setShared } from "herdr";
-import { ticketPage, choices, ago, updateTicket, usernameOf } from "./codebase.js";
-import { colourOf, FIELDS, TITLES, announceChange, errText, setField, fieldMark } from "./ui.js";
+import { ticketPage, choices, ago, usernameOf } from "./codebase.js";
+import { colourOf, FIELDS, TITLES, fieldMark, saveField, optionsMenu, paneNote } from "./ui.js";
 import { filterBar, searchOf, NO_FILTER } from "./filters.js";
 import { toggleTicket, shownTicket } from "./panes.js";
 
@@ -18,35 +17,15 @@ const RECENT_CLOSED = 1; // pages (20) of the most recently updated closed ticke
 const COLUMN = 264;      // px
 const THRESHOLD = 5;     // px the pointer moves before a press becomes a drag
 
-/** Changes one field of a card: on the board at once, then in Codebase; back if that fails. */
+/** Changes one field of a card (a column is a status): on the board at once, then in Codebase; back if that fails. */
 function change(v, k, kind, option, cx) {
-  const ref = v.ref, f = FIELDS[kind];
   v.cardMenu = null;
-  // On the viewer, not the board: a reload while saving replaces the board.
-  const saving = (v.saving ??= new Set());
-  if ((k[f.id] ?? null) === (option.id ?? null) || saving.has(k.id)) { cx.notify(); return; }
-  const before = setField(k, kind, option);
-  k.updated = Date.now();
-  // The card may be in another column now, and first in it.
-  if (v.board) v.board.columns = null;
-  saving.add(k.id);
+  // The card may be in another column now, and first in it (and back, if Codebase says no).
+  const regroup = () => { if (v.board) v.board.columns = null; };
+  // The saving set is on the viewer, not the board: a reload while saving replaces the board.
+  if (saveField(cx, { creds: v.creds, from: v.me, project: v.ref.project, k, kind, option, busy: (v.saving ??= new Set()), after: regroup })) regroup();
   cx.notify();
-  cx.spawn(async (cx) => {
-    try {
-      await updateTicket(v.creds, ref.project, k.id, { [f.change]: option.id ?? "" });
-      announceChange(setShared, v.me, ref.project, k.id);
-    } catch (e) {
-      Object.assign(k, before);
-      if (v.board) v.board.columns = null;
-      notify({ title: `Could not change #${k.id}`, body: errText(e), level: "error", timeout: 10000 });
-    }
-    saving.delete(k.id);
-    cx.notify();
-  });
 }
-
-/** Moves a card to a column: its status. */
-const move = (v, k, column, cx) => change(v, k, "status", column, cx);
 
 /**
  * { statuses: [{id, name, colour, closed}] (open ones in order, then the closed ones), meta, tickets }. Every open ticket; of the closed ones (there can be thousands)
@@ -101,7 +80,7 @@ function columnsOf(b) {
  */
 export function boardView(v, t, avatar) {
   const b = v.board, ref = v.ref;
-  const note = (text, color) => div().p(16).text_size(12.5).text_color(color ?? t.dim).child(text);
+  const note = (text, color) => paneNote(t, text, color);
   const head = h_flex().flex_none().h(44).px(18).gap(8).items_center().border_b(1).border_color(t.border)
     .child(svg("mods/codebasehq/icons/kanban.svg").size(15).flex_none().text_color(t.muted))
     .child(div().flex_none().text_size(14).font_semibold().child("Kanban"))
@@ -127,7 +106,8 @@ export function boardView(v, t, avatar) {
   const now = Date.now();
   const drag = v.drag; // { k, from, start, offset, at, active, over }
   const meta = b.meta;
-  const mark = (kind, o) => fieldMark(t, kind, o, 12, (p, size) => avatar(p.name, size, p.id));
+  const person = (p, size) => avatar(p.name, size, p.id);
+  const mark = (kind, o) => fieldMark(t, kind, o, 12, person);
   const valueOf = (k, kind) => {
     const f = FIELDS[kind];
     const name = kind === "assignee" ? (k.assigneeId != null ? v.userName(k.assigneeId, k.assignee) : null) : k[f.name];
@@ -147,20 +127,11 @@ export function boardView(v, t, avatar) {
       .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
       .on_click((_e, cx) => { cx.stop_propagation(); v.cardMenu = open ? null : { id: k.id, kind }; cx.notify(); });
   };
-  const menu = (k, kind) => {
-    const f = FIELDS[kind], current = k[f.id] ?? null;
-    const options = meta?.[f.list] ?? [];
-    return v_flex().gap(1).pt(4).border_t(1).border_color(t.border)
-      .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
-      .child(div().px(4).pb(2).text_size(11).text_color(t.dim).child(TITLES[kind]))
-      .children(options.map((o) => h_flex().id(`opt-${k.id}-${kind}-${o.id ?? "none"}`).h(26).px(4).gap(8).rounded(5)
-        .items_center().text_size(12).cursor_pointer()
-        .when((o.id ?? null) === current, (el) => el.bg(t.selected)).hover((s) => s.bg(t.hover))
-        .on_click((_e, cx) => { cx.stop_propagation(); change(v, k, kind, o, cx); })
-        .child(h_flex().w(18).flex_none().justify_center().child(mark(kind, o)))
-        .child(div().flex_1().min_w(0).truncate().text_color(o.id == null || o.closed ? t.muted : t.foreground).child(o.name))
-        .when(Boolean(o.closed), (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child("closes")))));
-  };
+  // A press in a card's menu doesn't start a drag.
+  const menu = (k, kind) => div().pt(4).border_t(1).border_color(t.border)
+    .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+    .child(optionsMenu(t, { id: `opt-${k.id}-${kind}`, kind, meta, picked: k[FIELDS[kind].id] ?? null, person,
+      pick: (o, cx) => { cx.stop_propagation(); change(v, k, kind, o, cx); } }));
   const viewing = shownTicket();
   const cardBody = (k, id, interactive = false) => {
     const open = interactive && v.cardMenu?.id === k.id ? v.cardMenu.kind : null;
@@ -203,7 +174,7 @@ export function boardView(v, t, avatar) {
     .on_mouse_up("left", (_e, cx) => {
       const d = v.drag;
       v.drag = null;
-      if (d?.active && c.id !== d.from) move(v, d.k, c, cx);
+      if (d?.active && c.id !== d.from) change(v, d.k, "status", c, cx);
       cx.notify();
     })
     .child(h_flex().flex_none().h(36).px(10).gap(7).items_center()

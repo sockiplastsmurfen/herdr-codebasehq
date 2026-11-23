@@ -2,7 +2,7 @@
 // type and milestone, sent to Codebase as a search ("assignee:me status:New,Accepted resolution:open").
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { FIELDS, TITLES, colourOf } from "./ui.js";
+import { FIELDS, TITLES, colourOf, textLink } from "./ui.js";
 
 export const FILTER_KINDS = ["assignee", "status", "priority", "category", "type", "milestone"];
 /** Nothing picked: everyone's tickets, open and closed. */
@@ -44,9 +44,7 @@ const label = (kind) => (kind === "assignee" ? "Assignee" : TITLES[kind]);
 export function filterBar(t, o) {
   const f = o.filter, meta = o.meta;
   const userName = (u) => (u === "me" ? "Me" : u === UNASSIGNED ? "Unassigned" : meta?.users?.find((x) => x.username === u)?.name ?? u);
-  const link = (id, text, onClick) => div().id(`${o.id}-${id}`).flex_none().px(6).h(22).rounded(5).flex().items_center()
-    .text_size(12).text_color(t.muted).hover((s) => s.bg(t.hover).text_color(t.foreground))
-    .on_click((_e, cx) => { cx.stop_propagation(); onClick(cx); }).child(text);
+  const link = (id, text, onClick) => textLink(t, `${o.id}-${id}`, text, onClick);
   const summary = (kind) => {
     if (kind === "resolution") return { open: "Open", closed: "Closed", all: "Open and closed" }[f.resolution];
     const v = f[kind];
