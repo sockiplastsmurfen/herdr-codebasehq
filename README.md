@@ -26,7 +26,8 @@ A [Herdr](https://herdr.dev) mod for [Codebase HQ](https://www.codebasehq.com) t
   the ticket in the browser. The **reload** icon reloads (it also reloads every 2 minutes, and within
   20 seconds of a ticket changing elsewhere: by Claude, in Codebase's web UI).
 - **Filter** with the buttons above the list: resolution (Open, Closed, Open and closed),
-  Assignee, Status, Priority, Category, Type and Milestone (finished milestones too, marked done).
+  Assignee (people, Me and Unassigned), Status, Priority, Category, Type and Milestone (finished
+  milestones too, marked done).
   Pick several values in one filter; **Any** clears it, **Reset** goes back to the default
   `assignee:me resolution:open`. The filter is sent to Codebase as a search (e.g.
   `assignee:me status:"In Progress",New resolution:open`) and remembered per project. The list

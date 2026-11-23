@@ -14,9 +14,21 @@ const VALUES = { milestone: "allMilestones" };
 
 const quote = (v) => (/[\s,:"]/.test(v) ? `"${v.replace(/"/g, "")}"` : v);
 
+// The assignee value for tickets with nobody assigned. Codebase drops it from a list of values
+// ("assignee:me,none" is only yours) but ORs it as a term of its own ("assignee:none assignee:me").
+export const UNASSIGNED = "none";
+
 /** { assignee: ["me"], resolution: "open" } -> 'assignee:me resolution:open' (resolution: false leaves it out) */
 export function searchOf(f, resolution = true) {
-  const parts = FILTER_KINDS.filter((k) => f[k]?.length).map((k) => `${k}:${f[k].map(quote).join(",")}`);
+  const parts = [];
+  for (const k of FILTER_KINDS) {
+    let values = f[k] ?? [];
+    if (k === "assignee" && values.includes(UNASSIGNED)) {
+      parts.push(`assignee:${UNASSIGNED}`);
+      values = values.filter((v) => v !== UNASSIGNED);
+    }
+    if (values.length) parts.push(`${k}:${values.map(quote).join(",")}`);
+  }
   if (resolution && f.resolution !== "all") parts.push(`resolution:${f.resolution}`);
   return parts.join(" ");
 }
@@ -31,7 +43,7 @@ const label = (kind) => (kind === "assignee" ? "Assignee" : TITLES[kind]);
  */
 export function filterBar(t, o) {
   const f = o.filter, meta = o.meta;
-  const userName = (u) => (u === "me" ? "Me" : meta?.users?.find((x) => x.username === u)?.name ?? u);
+  const userName = (u) => (u === "me" ? "Me" : u === UNASSIGNED ? "Unassigned" : meta?.users?.find((x) => x.username === u)?.name ?? u);
   const link = (id, text, onClick) => div().id(`${o.id}-${id}`).flex_none().px(6).h(22).rounded(5).flex().items_center()
     .text_size(12).text_color(t.muted).hover((s) => s.bg(t.hover).text_color(t.foreground))
     .on_click((_e, cx) => { cx.stop_propagation(); onClick(cx); }).child(text);
@@ -63,7 +75,7 @@ export function filterBar(t, o) {
       options = null;
     } else {
       const list = kind === "assignee"
-        ? [{ value: "me", name: "Me" }, ...(meta.users ?? []).filter((u) => u.username && u.username !== o.me).map((u) => ({ value: u.username, name: u.name }))]
+        ? [{ value: "me", name: "Me" }, { value: UNASSIGNED, name: "Unassigned" }, ...(meta.users ?? []).filter((u) => u.username && u.username !== o.me).map((u) => ({ value: u.username, name: u.name }))]
         : (meta[VALUES[kind] ?? FIELDS[kind].list] ?? []).map((x) => ({ value: x.name, name: x.name, colour: x.colour, closed: x.closed, done: x.done }));
       options = list.map((x) => ({ ...x, on: f[kind].includes(x.value) }));
     }
