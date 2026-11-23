@@ -8,10 +8,10 @@
 //   details picked under it (status, priority, type, category, assignee, milestone); ⌘↩ posts too.
 import { div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, TextView, TextareaState, Textarea, ScrollHandle } from "gpui-base";
-import { props, shared, checking, settings, spaces, appHome } from "herdr";
+import { props, shared, checking, settings, spaces, appHome, openOverlay, notify } from "herdr";
 import {
   loadCredentials, accountOf, ticketDetail, ticketNotes, accountUsers, ticketUrl, defaultBase, ago,
-  noteCommits, commitUrl, findClone, commitDiff, uploadId, downloadUpload, postNote, choices,
+  noteCommits, commitUrl, findClone, commitDiff, uploadId, downloadUpload, saveToDownloads, canShow, postNote, choices,
 } from "./codebase.js";
 import {
   TITLES, FIELDS, personColour, personBadge, wantPictures, CHANGED, copyId, announceChange, changeIsAbout, errText, openLink,
@@ -196,6 +196,7 @@ export class Viewer {
     this.diffs = new Map();     // commit ref -> { open, loading, rows (diffRows), error, limit } for the opened commits
     this.clones = new Map();    // clone url -> local folder (or null: none here)
     this.images = new Map();    // upload id -> { open, loading, path, width, height, error }
+    this.saving = new Set();    // upload ids being saved in Downloads
     try { this.boardFilters = JSON.parse(localStorage.getItem("boardFilters") ?? "{}") ?? {}; } catch { this.boardFilters = {}; }
     this.boardFilterMenu = null; // the board filter whose values are open
     this.pictures = new Map();  // user id -> picture path (or null: initials)
@@ -564,6 +565,47 @@ export class Viewer {
     });
   }
 
+  /** Shows an attachment in a Herdr dialog (fileview.js): its pages, Download, Quick Look. */
+  openFile(a, base) {
+    const url = a.url?.startsWith("/") ? base + a.url : a.url;
+    openOverlay({ mod: "codebasehq", kind: "dialog", width: 0.8, height: 0.9, props: { view: "file", id: a.id, name: a.name, url } });
+  }
+
+  /** Saves an upload (an attachment or an image) in ~/Downloads, downloading it through the API first. */
+  download(a, cx) {
+    if (this.saving.has(a.id)) return;
+    this.saving.add(a.id);
+    cx.notify();
+    cx.spawn(async (cx) => {
+      try {
+        const path = await saveToDownloads(this.creds, appHome(), a.id, a.name);
+        notify({ title: `Saved ${path.split("/").pop()}`, body: "In Downloads", level: "success", timeout: 5000 });
+      } catch (e) {
+        notify({ title: `Could not download ${a.name}`, body: errText(e), level: "error", timeout: 10000 });
+      }
+      this.saving.delete(a.id);
+      cx.notify();
+    });
+  }
+
+  /**
+   * An attachment that isn't an image shown in the text. One the dialog can show (canShow): its
+   * name opens the dialog, which has Download and the rest. Any other (a zip): its name and the
+   * download icon after it save it in Downloads.
+   */
+  fileView(t, n, a, j, base) {
+    const row = h_flex().gap(2).items_center().text_size(12);
+    const name = div().id(`att-${n.id}-${j}`).min_w(0).truncate().text_color(t.accent).cursor_pointer().hover((s) => s.text_color(t.foreground))
+      .child(`📎 ${a.name}`);
+    // Without an upload id it can only be opened in the browser.
+    if (!a.id) return row.child(name.tooltip("Open it in the browser").on_click((_e, cx) => openLink(cx, a.url, base)));
+    if (canShow(a.name)) return row.child(name.tooltip("Show it").on_click(() => this.openFile(a, base)));
+    return row
+      .child(name.mr(4).tooltip("Download (to Downloads)").on_click((_e, cx) => this.download(a, cx)))
+      .child(iconLink(t, `att-download-${n.id}-${j}`, "mods/codebasehq/icons/download.svg", (cx) => this.download(a, cx), null, "Download (to Downloads)"))
+      .when(this.saving.has(a.id), (el) => el.child(div().flex_none().pl(4).text_size(11).text_color(t.dim).child("Saving…")));
+  }
+
   /** An image box: like a commit, a row to open it, and the picture, scaled to the pane. */
   imageView(t, n, img, base) {
     const d = this.images.get(img.id);
@@ -577,6 +619,8 @@ export class Viewer {
         .child(svg(`mods/codebasehq/icons/chevron-${d?.open ? "down" : "right"}.svg`).size(12).flex_none().text_color(t.dim))
         .child(svg("mods/codebasehq/icons/image.svg").size(13).flex_none().text_color(t.muted))
         .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(img.name))
+        .when(this.saving.has(img.id), (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child("Saving…")))
+        .child(iconLink(t, `img-download-${n.id}-${img.id}`, "mods/codebasehq/icons/download.svg", (cx) => this.download(img, cx), null, "Download (to Downloads)"))
         .when(Boolean(img.url), (el) => el.child(iconLink(t, `img-open-${n.id}-${img.id}`, "mods/codebasehq/external.svg",
           (cx) => openLink(cx, img.url, base), null, "Open the image in the browser"))))
       .when(Boolean(d?.open), (el) => el.child(
@@ -773,10 +817,7 @@ export class Viewer {
             : TextView.markdown(`note-text-${n.id}-${j}`, b.markdown).selectable(true)
               .on_link_click((link, cx) => openLink(cx, link, base))))))
         .when(images.length > 0, (el) => el.child(v_flex().gap(6).children(images.map((img) => this.imageView(t, n, img, base)))))
-        .when(attachments.length > 0, (el) => el.child(v_flex().gap(2).children(attachments.map((a, j) =>
-          div().id(`att-${n.id}-${j}`).text_size(12).text_color(t.accent).hover((s) => s.text_color(t.foreground))
-            .on_click((_e, cx) => openLink(cx, a.url, base))
-            .child(`📎 ${a.name}`)))));
+        .when(attachments.length > 0, (el) => el.child(v_flex().gap(2).children(attachments.map((a, j) => this.fileView(t, n, a, j, base)))));
     };
 
     const notes = this.notes ?? [];

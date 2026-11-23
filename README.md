@@ -48,6 +48,11 @@ A [Herdr](https://herdr.dev) mod for [Codebase HQ](https://www.codebasehq.com) t
 - **Images** in notes: click to see the image in the pane, scaled to fit; the arrow icon opens
   it in the browser. They are downloaded through the API (`/uploads/<id>`) once and kept in
   `~/.config/herdr-app/data/codebasehq-images/`.
+- **Attachments**: click one to see it in a Herdr dialog (Esc closes it). PDFs and Word, RTF and
+  ODT documents show page by page; Excel, PowerPoint and other files their first page; text
+  files as text. The dialog has Download (to `~/Downloads`), Quick Look (the file as macOS shows
+  it) and the browser. A file the dialog can't show (a zip) is downloaded when you click it, and
+  has a download icon after it. An image in a note has a download icon too. Files are downloaded through the API once and kept in `~/.config/herdr-app/data/codebasehq-files/`.
 - **Post a response** (the speech-bubble icon in the ticket pane's header) opens a form at
   the bottom: a note in Markdown, posted with
   **Post** or ⌘↩, with status, priority, type, category, assignee and milestone to change in
@@ -71,7 +76,7 @@ A [Herdr](https://herdr.dev) mod for [Codebase HQ](https://www.codebasehq.com) t
   web (http/https) links.
 
 The mod calls `https://api3.codebasehq.com` and runs `git`, `security` (macOS), `curl`,
-`sips` and `shasum`. It is macOS only.
+`sips`, `osascript` (PDFKit and the text system, to draw pages), `qlmanage` and `shasum`. It is macOS only.
 
 ## Install
 

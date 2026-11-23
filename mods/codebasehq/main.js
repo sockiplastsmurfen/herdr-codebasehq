@@ -23,6 +23,7 @@ import {
   errText, openLink, iconLink, fieldMark, saveField, optionsMenu, textButton, textLink,
 } from "./ui.js";
 import { Viewer } from "./viewer.js";
+import { FileView } from "./fileview.js";
 import { filterBar, searchOf } from "./filters.js";
 import { viewerPane, toggleTicket, toggleKanban, showTicket, shownTicket, BOARD } from "./panes.js";
 
@@ -57,9 +58,11 @@ const DEFAULT_FILTER = { assignee: ["me"], status: [], priority: [], category: [
 
 export default class Tickets extends View {
   init(_props, cx) {
-    // A copy opened as a pane to show a ticket or a project's board (see viewer.js).
-    if (props()?.view === "ticket" || props()?.view === "kanban") {
-      this.viewer = new Viewer();
+    // A copy opened as a pane to show a ticket or a project's board (see viewer.js), or as a
+    // dialog to show an attachment (fileview.js).
+    const view = props()?.view;
+    if (view === "ticket" || view === "kanban" || view === "file") {
+      this.viewer = view === "file" ? new FileView() : new Viewer();
       this.viewer.init(cx);
       return;
     }

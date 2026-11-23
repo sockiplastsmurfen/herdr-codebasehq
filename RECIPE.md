@@ -25,7 +25,7 @@ Your Codebase HQ tickets in Herdr. A panel beside Files and Changes lists the ti
     - The author's badge (22px) and name, and the age, with the full date on hover.
     - Field changes as "Status: New → Accepted" lines (11.5px, `muted`).
     - The text as Markdown (13px). A paragraph that @mentions someone is drawn word by word, with the name in that person's colour.
-    - Images as boxes that unfold to the picture scaled to the pane, and other attachments as 📎 links.
+    - Images as boxes that unfold to the picture scaled to the pane. Other attachments as 📎 names. One the dialog can show (by its extension: PDF, Word, RTF, ODT, HTML, office files, images, text) opens the attachment dialog when clicked, with no icons after it. Any other (a zip) is saved in `~/Downloads` when clicked ("Saving…", then a toast), with a download icon after it that does the same. Without an upload id, the name opens the browser. An image box has a download icon too.
     - A note made by a commit shows as "<author> committed" and a box: chevron, commit icon, the short id in the mono font in an accent chip, a branch icon, the branch, an Open icon, then the message title and body. Unfolding it shows the diff, with file headings, + lines in green (`ansi2`), − lines in red (`ansi1`), hunks in cyan (`ansi6`) and 1500 lines at a time with "Show more".
   - **At the bottom**, while Post a response is open: a textarea (4–14 rows, Markdown), then chips for Status, Priority, Type, Category, Assigned to and Milestone (26px, radius 6, outlined in accent when changed), then Post, Cancel, "N details changed" and "⌘↩ posts".
 - **The board pane** (a pane of its own, zoomed to the whole work area):
@@ -33,6 +33,7 @@ Your Codebase HQ tickets in Herdr. A panel beside Files and Changes lists the ti
   - The same filter bar, with nothing picked by default.
   - One column per status, 264px wide with radius 10, in the project's order with the closed statuses last. Each column header has a dot, the name and a count ("3 recent" for closed ones).
   - Cards with radius 8 and padding 10: `#id` and the summary (12.5px), then status, priority, type, category (grows), age and assignee.
+- **The attachment dialog** (a Herdr dialog, 80% × 90% of the window; Esc or a click beside it closes it): a 44px header with a paperclip, the file's name (13px semibold), "N pages" or "first page" (dim), and 22px icons: Download, Quick Look (eye), Open in the browser, Close (×). Under it, on `background`, the pages as pictures, centered, 12px apart, at most the dialog's width (a small picture keeps its size), white behind document pages. A text file shows as text in the mono font (5000 lines). "Opening <name>…" while it is prepared.
 - **Settings** (in the panel): API username (`account/username`), API key (masked), Codebase URL for links and Default project folder (`~/Sites` when empty), with Save and Forget credentials.
 
 ## How it behaves
@@ -55,15 +56,17 @@ Your Codebase HQ tickets in Herdr. A panel beside Files and Changes lists the ti
 
 ## Built from
 
-- `mods/codebasehq/`, `mod.json` `{ "place": "none", "title": "CodebaseHQ" }`. One mod in three roles:
+- `mods/codebasehq/`, `mod.json` `{ "place": "none", "title": "CodebaseHQ" }`. One mod in four roles:
   - no `props.view`: the panel list (`main.js`)
   - `props.view: "ticket"`: the ticket pane (`viewer.js`)
   - `props.view: "kanban"`: the board pane (`viewer.js` with `kanban.js`)
+  - `props.view: "file"`: the attachment dialog (`fileview.js`), opened with `openOverlay({ kind: "dialog" })`
 - **Files**:
   - `codebase.js`: the API, the keychain and git
   - `filters.js`: the shared filter bar
   - `panes.js`: opening and closing the ticket and board panes
-  - `ui.js`: field marks, badges, links and change announcements
+  - `ui.js`: field marks, badges, links, the shared field change and value menu, and change announcements
+  - `fileview.js`: the attachment dialog (`props.view: "file"`)
   - SVG icons in the folder and in `icons/`
 - **API**: Codebase API v3 at `https://api3.codebasehq.com`, JSON, with Basic auth `account/username:key`.
   - `/<project>/tickets?query=…&page=`
@@ -73,7 +76,7 @@ Your Codebase HQ tickets in Herdr. A panel beside Files and Changes lists the ti
   - `/uploads/<id>`
   - POST `/<project>/tickets` for a new ticket
 - **`herdr` functions**: `exec`, `focused`, `spaces`, `panes`, `run` (`pane.split`, `pane.close`, `pane.zoom`, `layout.hide`), `shared`/`setShared`, `notify`, `appHome`, `layout`, `settings`, `theme`, `props`, `checking`.
-- **Programs**: `git`, `security` (the macOS keychain, service `herdr-codebasehq`), `curl` (images and pictures), `sips` (image size), `shasum`, `/bin/sh`.
+- **Programs**: `git`, `security` (the macOS keychain, service `herdr-codebasehq`), `curl` (images, pictures and attachments), `sips` (image size), `osascript` (PDFKit and the text system, to draw attachments' pages), `qlmanage` (Quick Look), `shasum`, `/bin/sh`.
 - **In the layout**: a block `{ "id": "codebasehq", "type": "block", "content": { "mod": "codebasehq" } }` in the side panel's stack, and a panel button in the tab bar.
 
 ## Watch out
@@ -84,6 +87,12 @@ Your Codebase HQ tickets in Herdr. A panel beside Files and Changes lists the ti
 - **`/users`** also returns other people's API keys. Keep only names, ids and picture URLs.
 - **Commit notes**: the API gives a note made by a commit only its message, with no commit id and no repository. Matching by message is the only way.
 - **Images**: Codebase serves note images (`/upload/<id>/show/original`) only to a logged-in browser, but the API serves the same file at `/uploads/<id>`. `fetch()` reads text only, so `curl` downloads it. Pass the key to curl on stdin through a config file (`-K -`), escaped, never on its command line.
+- **Attachments**: Herdr draws pictures and text, not PDFs or Word files. Download the file the way images are (`/uploads/<id>`) into `data/codebasehq-files/<id>/<name>`, the name kept (the tools go by its extension) but made safe for a path: letters and digits of any script and ` ._()+,-` only, no leading dot or dash. Then turn it into pictures with macOS's own tools, through `osascript -l JavaScript` (JavaScript for Automation, which reaches PDFKit and AppKit):
+  - a PDF: PDFKit draws each page (at most 60, 1400px wide) to `pages/<n>.png`;
+  - Word, RTF, ODT, HTML: `NSAttributedString` reads it and `NSPrintOperation` lays it out on A4 pages as a PDF (not centered on the page), then as a PDF;
+  - anything else (Excel, PowerPoint, Pages, Numbers…): `qlmanage -t` makes a picture of its first page;
+  - images as they are, text files as text.
+  Quick Look (`qlmanage -p`) runs in the background (`&`), so its window stays after the exec returns. Download copies the file to `~/Downloads`, adding " (2)" and so on when the name is taken, and an image's format as extension when its name has none.
 - **Pictures**: Codebase's picture for someone without one is a grey silhouette. Treat that file (by its SHA-256) as no picture, so initials show instead.
 - **A space's `folder`** is only where its new terminals start, and can be another project's folder. Its terminals' folders (`panes()[].cwd`) say where it works.
 - **Panes**: `panes()` names only the mod, so `shared("codebasehq.panes")` remembers which pane is the ticket pane and which is the board. A zoomed tab can't be split: unzoom first.

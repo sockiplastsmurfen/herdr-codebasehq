@@ -484,15 +484,12 @@ export function uploadId(url) {
 }
 
 /**
- * Downloads an upload once into <appHome>/data/codebasehq-images/ and reads its size.
- * Returns { path (relative to appHome, for image()), width, height }.
+ * Downloads an upload (by its id) through the API into file, once; then runs `then` (more shell,
+ * with the file as "$2"). The key goes to curl on stdin, in its config: never on a command line.
  */
-export async function downloadUpload(creds, appHome, id, name) {
+async function fetchUpload(creds, id, file, then = "", timeout = 60000) {
   if (!/^[0-9a-f-]{20,}$/i.test(id ?? "")) throw new Error("Not a Codebase upload.");
-  const ext = (/\.(png|jpe?g|gif|webp|svg)$/i.exec(name ?? "")?.[1] ?? "png").toLowerCase();
-  const rel = `data/codebasehq-images/${id}.${ext}`;
-  const file = `${appHome}/${rel}`;
-  const r = await exec("/bin/sh", ["-c", [
+  return exec("/bin/sh", ["-c", [
     'set -e',
     'mkdir -p "$(dirname "$2")"',
     'if [ ! -s "$2" ]; then',
@@ -501,11 +498,163 @@ export async function downloadUpload(creds, appHome, id, name) {
     '  printf \'user = "%s"\\n\' "$(printf %s "$1:$key" | sed \'s/[\\\\"]/\\\\&/g\')" | curl -sfL -K - -o "$2.part" "$3"',
     '  mv "$2.part" "$2"',
     'fi',
-    'sips -g pixelWidth -g pixelHeight "$2" 2>/dev/null | awk \'/pixel(Width|Height)/ { print $2 }\'',
-  ].join("\n"), "sh", creds.user, file, `${API}/uploads/${id}`, SERVICE], { timeout: 60000 });
+    then,
+  ].join("\n"), "sh", creds.user, file, `${API}/uploads/${id}`, SERVICE], { timeout });
+}
+
+/**
+ * Downloads an image upload once into <appHome>/data/codebasehq-images/ and reads its size.
+ * Returns { path (relative to appHome, for image()), width, height }.
+ */
+export async function downloadUpload(creds, appHome, id, name) {
+  const ext = (/\.(png|jpe?g|gif|webp|svg)$/i.exec(name ?? "")?.[1] ?? "png").toLowerCase();
+  const rel = `data/codebasehq-images/${id}.${ext}`;
+  const r = await fetchUpload(creds, id, `${appHome}/${rel}`,
+    'sips -g pixelWidth -g pixelHeight "$2" 2>/dev/null | awk \'/pixel(Width|Height)/ { print $2 }\'');
   if (r.code !== 0) throw new Error((r.stderr || "").trim() || "The image could not be downloaded.");
   const [width, height] = r.stdout.trim().split("\n").map(Number);
   return { path: rel, width: width || 0, height: height || 0 };
+}
+
+// --- attachments -----------------------------------------------------------------
+// Herdr draws pictures and text, not PDFs or Word files. So an attachment is turned into page
+// pictures with macOS's own tools: PDFKit draws a PDF's pages; the text system lays a Word, RTF,
+// ODT or HTML document out on A4 pages (as a PDF, then drawn the same way); Quick Look makes a
+// picture of the first page of anything else (Excel, PowerPoint, Pages, Numbers…).
+
+const PAGE_WIDTH = 1400;  // px a page is drawn at
+const MAX_PAGES = 60;     // pages drawn at most; Quick Look shows the rest
+
+// JavaScript for Automation (osascript -l JavaScript): a PDF's pages -> <out>/<n>.png.
+// Prints the page count, then "<width> <height>" per page drawn.
+const PDF_PAGES = `ObjC.import("PDFKit"); ObjC.import("AppKit");
+function run(argv) {
+  const [file, out, max, width] = argv;
+  const doc = $.PDFDocument.alloc.initWithURL($.NSURL.fileURLWithPath(file));
+  if (!doc || doc.isNil()) throw new Error("This PDF can't be read.");
+  const lines = [String(doc.pageCount)];
+  for (let i = 0; i < Math.min(doc.pageCount, Number(max)); i++) {
+    const page = doc.pageAtIndex(i), box = page.boundsForBox($.kPDFDisplayBoxMediaBox), k = Number(width) / box.size.width;
+    const img = page.thumbnailOfSizeForBox($.NSMakeSize(box.size.width * k, box.size.height * k), $.kPDFDisplayBoxMediaBox);
+    const rep = $.NSBitmapImageRep.imageRepWithData(img.TIFFRepresentation);
+    rep.representationUsingTypeProperties($.NSBitmapImageFileTypePNG, $()).writeToFileAtomically(out + "/" + (i + 1) + ".png", true);
+    lines.push(rep.pixelsWide + " " + rep.pixelsHigh);
+  }
+  return lines.join("\\n");
+}`;
+
+// A document the text system reads (doc, docx, rtf, odt, html) -> a PDF on A4 pages.
+const TEXT_TO_PDF = `ObjC.import("AppKit");
+function run(argv) {
+  const [file, out] = argv;
+  const text = $.NSAttributedString.alloc.initWithURLOptionsDocumentAttributesError($.NSURL.fileURLWithPath(file), $({}), null, null);
+  if (!text || text.isNil()) throw new Error("This document can't be read.");
+  const info = $.NSPrintInfo.sharedPrintInfo.copy, margin = 56, width = 595 - 2 * margin;
+  info.paperSize = $.NSMakeSize(595, 842);
+  info.topMargin = margin; info.bottomMargin = margin; info.leftMargin = margin; info.rightMargin = margin;
+  info.horizontalPagination = $.NSPrintingPaginationModeFit; info.verticalPagination = $.NSPrintingPaginationModeAutomatic;
+  info.verticallyCentered = false; info.horizontallyCentered = false;
+  const view = $.NSTextView.alloc.initWithFrame($.NSMakeRect(0, 0, width, 842));
+  view.textStorage.setAttributedString(text);
+  view.layoutManager.ensureLayoutForTextContainer(view.textContainer);
+  view.setFrame($.NSMakeRect(0, 0, width, Math.max(view.layoutManager.usedRectForTextContainer(view.textContainer).size.height + 20, 100)));
+  info.dictionary.setObjectForKey($.NSPrintSaveJob, $.NSPrintJobDisposition);
+  info.dictionary.setObjectForKey($.NSURL.fileURLWithPath(out), $.NSPrintJobSavingURL);
+  const op = $.NSPrintOperation.printOperationWithViewPrintInfo(view, info);
+  op.showsPrintPanel = false; op.showsProgressPanel = false;
+  if (!op.runOperation) throw new Error("This document could not be laid out.");
+  return out;
+}`;
+
+const IMAGE_TYPES = /^(png|jpe?g|gif|webp|bmp|tiff?|heic)$/;
+const DOCUMENT_TYPES = /^(docx?|rtf|odt|html?|wordml|webarchive)$/;
+const TEXT_TYPES = /^(txt|md|markdown|csv|tsv|log|json|xml|ya?ml|ini|conf|sql|sh|js|ts|php|css|py|rb)$/;
+// Files Quick Look makes a picture of (their first page): office files and the like.
+const FIRST_PAGE_TYPES = /^(xlsx?|xlsm|pptx?|ppsx?|numbers|key|pages|ods|odp|odg|eps|ai|psd|svg|heic|mov|mp4|m4v)$/;
+
+/** Whether an attachment can be shown in the attachment dialog (by its name); others are downloaded. */
+export function canShow(name) {
+  const ext = (/\.([a-z0-9]+)$/i.exec(name ?? "")?.[1] ?? "").toLowerCase();
+  return ext === "pdf" || [IMAGE_TYPES, DOCUMENT_TYPES, TEXT_TYPES, FIRST_PAGE_TYPES].some((re) => re.test(ext));
+}
+
+/** Where an attachment goes: data/codebasehq-files/<id>/<its name, made safe for a path>. */
+function attachmentPath(appHome, id, name) {
+  if (!/^[0-9a-f-]{20,}$/i.test(id ?? "")) throw new Error("Not a Codebase upload.");
+  // Letters and digits of any script, and a few marks: no slash, so it stays in its folder.
+  const safe = (name ?? "").replace(/[^\p{L}\p{N} ._()+,-]/gu, "_").replace(/^[\s.-]+/, "").slice(-120) || "attachment";
+  const rel = `data/codebasehq-files/${id}`;
+  return { dir: `${appHome}/${rel}`, rel, file: `${appHome}/${rel}/${safe}`, ext: (/\.([a-z0-9]+)$/i.exec(safe)?.[1] ?? "").toLowerCase() };
+}
+
+/** Downloads an attachment through the API, once. Returns its path. */
+export async function downloadAttachment(creds, appHome, id, name) {
+  const { file } = attachmentPath(appHome, id, name);
+  const r = await fetchUpload(creds, id, file, "", 300000);
+  if (r.code !== 0) throw new Error((r.stderr || "").trim() || "The file could not be downloaded.");
+  return file;
+}
+
+/**
+ * An attachment, ready to show (downloaded first): { kind, pages, count, text }.
+ *   "pages": pages [{ path (for image()), width, height }] and count, the document's page count.
+ *   "image": one page, the picture itself.
+ *   "first": one page, Quick Look's picture of the first page or sheet.
+ *   "text": text, the file as text.
+ */
+export async function attachmentView(creds, appHome, id, name) {
+  const at = attachmentPath(appHome, id, name);
+  await downloadAttachment(creds, appHome, id, name);
+  const size = async (rel) => {
+    const r = await exec("sips", ["-g", "pixelWidth", "-g", "pixelHeight", `${appHome}/${rel}`], { timeout: 15000 });
+    const [width, height] = [...(r.stdout ?? "").matchAll(/pixel(?:Width|Height): (\d+)/g)].map((m) => Number(m[1]));
+    return { path: rel, width: width || 0, height: height || 0 };
+  };
+  if (IMAGE_TYPES.test(at.ext)) return { kind: "image", pages: [await size(`${at.rel}/${at.file.split("/").pop()}`)], count: 1 };
+  if (TEXT_TYPES.test(at.ext)) return { kind: "text", text: (await readTextFile(at.file)) ?? "", count: 1 };
+  if (at.ext === "pdf" || DOCUMENT_TYPES.test(at.ext)) {
+    let pdf = at.file;
+    if (at.ext !== "pdf") {
+      pdf = `${at.dir}/layout.pdf`;
+      const r = await exec("osascript", ["-l", "JavaScript", "-e", TEXT_TO_PDF, at.file, pdf], { timeout: 120000 });
+      if (r.code !== 0) throw new Error((r.stderr || "").trim() || "The document could not be laid out.");
+    }
+    const r = await exec("/bin/sh", ["-c", 'rm -rf "$2" && mkdir -p "$2" && exec osascript -l JavaScript -e "$1" "$3" "$2" "$4" "$5"',
+      "sh", PDF_PAGES, `${at.dir}/pages`, pdf, String(MAX_PAGES), String(PAGE_WIDTH)], { timeout: 300000 });
+    if (r.code !== 0) throw new Error((r.stderr || "").trim() || "The pages could not be drawn.");
+    const [count, ...sizes] = r.stdout.trim().split("\n");
+    return { kind: "pages", count: Number(count) || sizes.length, pages: sizes.map((s, i) => {
+      const [width, height] = s.split(" ").map(Number);
+      return { path: `${at.rel}/pages/${i + 1}.png`, width, height };
+    }) };
+  }
+  // Anything else: Quick Look's picture of its first page (it names it <file name>.png).
+  const r = await exec("/bin/sh", ["-c", 'mkdir -p "$1" && qlmanage -t -s "$3" -o "$1" "$2" >/dev/null 2>&1; test -s "$1/$(basename "$2").png"',
+    "sh", `${at.dir}/first`, at.file, String(PAGE_WIDTH)], { timeout: 60000 });
+  if (r.code !== 0) return { kind: "none", count: 0 };
+  return { kind: "first", count: 1, pages: [await size(`${at.rel}/first/${at.file.split("/").pop()}.png`)] };
+}
+
+/** Shows an attachment in macOS Quick Look, outside Herdr: every page and sheet as macOS draws it. */
+export async function quickLook(creds, appHome, id, name) {
+  const file = await downloadAttachment(creds, appHome, id, name);
+  // In the background: the window stays when this returns.
+  await exec("/bin/sh", ["-c", 'qlmanage -p "$1" >/dev/null 2>&1 &', "sh", file], { timeout: 10000 });
+}
+
+/** Saves an attachment in ~/Downloads, under its name (" (2)" and so on when taken). Returns the path. */
+export async function saveToDownloads(creds, appHome, id, name) {
+  const file = await downloadAttachment(creds, appHome, id, name);
+  const r = await exec("/bin/sh", ["-c", [
+    'd="$HOME/Downloads"; n=$(basename "$1")',
+    // A picture named without an extension ("image"): the one its format says.
+    'case "$n" in *.*) ;; *) f=$(sips -g format "$1" 2>/dev/null | awk \'/format:/ { print $2 }\'); [ -n "$f" ] && n="$n.$f" ;; esac',
+    'stem="${n%.*}"; ext="${n##*.}"; [ "$stem" = "$n" ] && ext="" || ext=".$ext"',
+    'i=2; while [ -e "$d/$n" ]; do n="$stem ($i)$ext"; i=$((i + 1)); done',
+    'mkdir -p "$d" && cp "$1" "$d/$n" && printf %s "$d/$n"',
+  ].join("\n"), "sh", file], { timeout: 30000 });
+  if (r.code !== 0) throw new Error((r.stderr || "").trim() || "The file could not be saved.");
+  return r.stdout.trim();
 }
 
 export const commitUrl = (base, project, repo, ref) => `${base}/projects/${project}/repositories/${repo}/commit/${ref}`;
