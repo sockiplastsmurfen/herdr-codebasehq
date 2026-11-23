@@ -71,7 +71,8 @@ export function toggleStartWork(v, cx) {
 /** Whether Start work can show: the shown space has a checkout of the ticket's project. */
 export const canStartWork = (v) => Boolean(v.checkouts?.length);
 
-async function start(v, cx) {
+/** Start: checks the form, then does the work in a task of its own (the click's cx is only good during the click). */
+function start(v, cx) {
   const s = v.start, ref = v.ref, k = v.ticket;
   const name = v.branchInput.value().trim();
   if (!s || s.busy || !k) return;
@@ -79,23 +80,25 @@ async function start(v, cx) {
   if (!validBranch(name)) { s.error = "Not a branch name git takes."; cx.notify(); return; }
   s.busy = true; s.error = null;
   cx.notify();
-  try {
-    const r = await startBranch(s.folder, name);
-    const p = plan(v);
-    if (Object.keys(p.changes).length) {
-      await updateTicket(v.creds, ref.project, ref.id, p.changes);
-      for (const [kind, option] of Object.entries(p.picked)) setField(k, kind, option);
-      announceChange(v.me, ref.project, ref.id);
-      v.reload(cx);
+  cx.spawn(async (cx) => {
+    try {
+      const r = await startBranch(s.folder, name);
+      const p = plan(v);
+      if (Object.keys(p.changes).length) {
+        await updateTicket(v.creds, ref.project, ref.id, p.changes);
+        for (const [kind, option] of Object.entries(p.picked)) setField(k, kind, option);
+        announceChange(v.me, ref.project, ref.id);
+        v.reload(cx);
+      }
+      const where = s.folder.split("/").pop();
+      notify({ title: `On ${name}`, body: r.how === "new" ? `A new branch from ${r.base}, in ${where}` : `In ${where}`, level: "success", timeout: 6000 });
+      if (v.start === s) v.start = null;
+    } catch (e) {
+      s.error = errText(e);
     }
-    const where = s.folder.split("/").pop();
-    notify({ title: `On ${name}`, body: r.how === "new" ? `A new branch from ${r.base}, in ${where}` : `In ${where}`, level: "success", timeout: 6000 });
-    if (v.start === s) v.start = null;
-  } catch (e) {
-    s.error = errText(e);
-  }
-  s.busy = false;
-  cx.notify();
+    s.busy = false;
+    cx.notify();
+  });
 }
 
 /** The form, under the ticket pane's header, while it is open for the shown ticket. */

@@ -102,6 +102,7 @@ Your Codebase HQ tickets in Herdr. A panel beside Files and Changes lists the ti
 - **Drag and drop**: GPUI-kit has none for your own elements. Build it from mouse down, move and up on the board.
 - **Unchecked API names**: `milestone_id` (as a change and on create) and the `milestone:` search keyword haven't been tried against Codebase. A milestone counts as finished when its status contains "complete" or "cancel".
 - **Cloning**: the clone URL comes from the API and goes on git's command line: check that it is `git@…`, `ssh://…` or `https://…` and pass it after `--`. git can't ask for a password or a host key from a mod, so make it fail instead of hang.
+- **A handler's `cx`** (a click's, a key's) is good during that call only: work that awaits goes in `cx.spawn(async (cx) => …)` and uses the `cx` it gets there.
 - **macOS only**: the keychain is reached through `security`, and the panel has nothing else to keep the key in.
 
 ## Done when
