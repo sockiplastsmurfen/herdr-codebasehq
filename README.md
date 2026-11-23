@@ -36,8 +36,8 @@ A [Herdr](https://herdr.dev) mod for [Codebase HQ](https://www.codebasehq.com) t
 - **Click a ticket's title** to see the whole ticket in a pane beside it: every field and
   every note (who, when, what changed, the text as Markdown, attachments). The fields are
   folded away; click the ticket's title in the pane to show them. Click status, priority, type, category,
-  assignee or milestone there to change it, as on a card in the list. Clicking another title
-  shows that ticket in the same pane; clicking the shown one again closes it.
+  assignee or milestone there to change it, as on a card in the list. The arrow icon in its header
+  scrolls to the latest note. Clicking another title shows that ticket in the same pane; clicking the shown one again closes it.
 - **Commits.** Notes made by commits (`[touch:123]`) show as commits: the author, the short
   commit id, the branch and the message. Click a commit to see its diff right there, from a
   local clone (a checkout of that repository in one of your spaces' folders or next to them;

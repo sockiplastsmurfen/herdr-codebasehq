@@ -7,7 +7,7 @@
 //   "Post a response" (the header's speech-bubble icon) opens a form at the bottom that posts a note (Markdown) and, as in Codebase, any
 //   details picked under it (status, priority, type, category, assignee, milestone); ⌘↩ posts too.
 import { div, svg, image } from "gpui-kit";
-import { v_flex, h_flex, TextView, TextareaState, Textarea } from "gpui-base";
+import { v_flex, h_flex, TextView, TextareaState, Textarea, ScrollHandle } from "gpui-base";
 import { props, shared, setShared, checking, settings, spaces, appHome, notify } from "herdr";
 import {
   loadCredentials, accountOf, ticketDetail, ticketNotes, accountUsers, ticketUrl, defaultBase, ago,
@@ -109,6 +109,7 @@ const NO_USERS = () => ({ byId: new Map(), byUsername: new Map(), idByName: new 
 export class Viewer {
   init(cx) {
     this.creds = undefined;
+    this.notesScroll = ScrollHandle.new(); // the notes, for "Go to the latest note"
     this.me = copyId();         // to know our own change announcements (the board's)
     this.seenChange = shared(CHANGED)?.at ?? 0;
     this.key = undefined;       // "<project>-<id>" being shown
@@ -671,6 +672,11 @@ export class Viewer {
       .child(h_flex().items_center().gap(2)
         .child(div().flex_1().min_w(0).text_size(11.5).text_color(t.dim).truncate()
           .child(`${this.ref.projectName ?? this.ref.project}${this.loading ? " · updating…" : ""}`))
+        .child(iconButton("view-latest", "mods/codebasehq/icons/arrow-down-to-line.svg", (cx) => {
+          // The last child of the notes is an empty marker after the last note: revealing it shows the end.
+          this.notesScroll.scroll_to_item((this.error ? 1 : 0) + Math.max(1, (this.notes ?? []).length));
+          cx.notify();
+        }, null, "Go to the latest note"))
         .child(iconButton("view-respond", "mods/codebasehq/icons/reply.svg", (cx) => this.toggleResponse(cx),
           this.reply.open ? t.accent : null, this.reply.open ? "Fold the response away (the text stays)" : "Post a response", this.reply.open))
         .child(iconButton("view-copy", this.copied ? "mods/codebasehq/check.svg" : "mods/codebasehq/copy.svg", (cx) => {
@@ -763,10 +769,11 @@ export class Viewer {
     const notes = this.notes ?? [];
     return root
       .child(header)
-      .child(v_flex().id("ticket-notes").flex_1().min_h(0).overflow_y_scrollbar().pb(16)
+      .child(v_flex().id("ticket-notes").flex_1().min_h(0).overflow_y_scrollbar().track_scroll(this.notesScroll)
         .when(Boolean(this.error), (el) => el.child(note(this.error, t.ansi1)))
         .when(notes.length === 0, (el) => el.child(note("No notes.")))
-        .children(notes.map(noteView)))
+        .children(notes.map(noteView))
+        .child(div().flex_none().h(16)))
       .when(this.reply.open, (el) => el.child(this.responseView(t, avatar)));
   }
 }
