@@ -75,3 +75,15 @@ check("… closed ones last (Open and closed)", all.join(" ") === "Accepted#116 
   check("a change elsewhere in All projects asks only its project again", world.asked.join() === "example-shop", world.asked);
   list.choose(null, cx); await settle();
 }
+
+// Settings: the tab bar's button name, shared with the tab-bar mod.
+{
+  check("the button is called CodebaseHQ by default (no shared name: the tab bar's default)", (world.shared["codebasehq.label"] ?? "CodebaseHQ") === "CodebaseHQ" && list.buttonLabel === "CodebaseHQ", world.shared["codebasehq.label"]);
+  list.openSetup(cx);
+  check("Settings has a field for the button's name", /Button name/.test(text(list.render())));
+  list.buttonLabelInput.set_value("  Ärenden  ");
+  list.save(cx); await settle();
+  check("saving shares the new name", world.shared["codebasehq.label"] === "Ärenden" && list.view === "list", world.shared["codebasehq.label"]);
+  list.openSetup(cx); list.buttonLabelInput.set_value(""); list.save(cx); await settle();
+  check("… and an empty field goes back to CodebaseHQ", world.shared["codebasehq.label"] === "CodebaseHQ", world.shared["codebasehq.label"]);
+}

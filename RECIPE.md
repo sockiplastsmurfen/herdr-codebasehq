@@ -36,7 +36,7 @@ Your Codebase HQ tickets in Herdr. A panel beside Files and Changes lists the ti
   - A column draws 30 cards, then a "Show N more (M not shown)" button (28px) that draws 30 more; how many are shown is kept per project and column, so the minute's reload doesn't fold it back.
   - Cards with radius 8 and padding 10: `#id` and the summary (12.5px), then status, priority, type, category (grows), age and assignee.
 - **The attachment dialog** (a Herdr dialog, 80% × 90% of the window; Esc or a click beside it closes it): a 44px header with a paperclip, the file's name (13px semibold), "N pages" or "first page" (dim), and 22px icons: Download, Quick Look (eye), Open in the browser, Close (×). Under it, on `background`, the pages as pictures, centered, 12px apart, at most the dialog's width (a small picture keeps its size), white behind document pages. A text file shows as text in the mono font (5000 lines). "Opening <name>…" while it is prepared.
-- **Settings** (in the panel): API username (`account/username`), API key (masked), Codebase URL for links and Default project folder (`~/Sites` when empty), with Save and Forget credentials.
+- **Settings** (in the panel): API username (`account/username`), API key (masked), Codebase URL for links, Default project folder (`~/Sites` when empty) and Button name (`CodebaseHQ` when empty: the tab bar's button for the panel, kept in localStorage and shared as `shared("codebasehq.label")` for the tab-bar mod, whose icon is `logo.svg`, Codebase's own mark), with Save and Forget credentials.
 
 ## How it behaves
 

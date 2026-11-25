@@ -95,7 +95,8 @@ A [Herdr](https://herdr.dev) mod for [Codebase HQ](https://www.codebasehq.com) t
 - **Credentials** (API username `account/username` and API key, from My Profile →
   API Credentials in Codebase) are entered in the panel the first time and kept in the
   macOS keychain under the service `herdr-codebasehq`. Settings also has the **default project
-  folder** (`~/Sites` unless you change it): where projects are cloned and checkouts looked for. Links in tickets open only if they are
+  folder** (`~/Sites` unless you change it): where projects are cloned and checkouts looked for, and the
+  **button name**: the name of the panel's button in the tab bar (`CodebaseHQ` unless you change it). Links in tickets open only if they are
   web (http/https) links.
 
 The mod calls `https://api3.codebasehq.com` and runs `git`, `security` (macOS), `curl`,
@@ -125,10 +126,11 @@ Then add the panel to your layout's side-panel stack (`panel-body` in Herdr's la
 and a button in your tab-bar mod (a clone of `tabs`), next to Files and Changes:
 
 ```js
-.child(panelButton("codebasehq", "Tickets", "mods/codebasehq/ticket.svg"))
+.child(panelButton("codebasehq", shared("codebasehq.label") || "CodebaseHQ", "mods/codebasehq/logo.svg"))
 ```
 
-(plus `"codebasehq"` in its `enabled` list). Herdr's shipped layouts and mods are
+(plus `"codebasehq"` in its `enabled` list). The button's name is set under Settings
+(**Button name**, `CodebaseHQ` when empty); the mod shares it as `shared("codebasehq.label")`. Herdr's shipped layouts and mods are
 read-only: clone them first (`herdr-app do layout.clone`, `mod.clone`).
 
 [RECIPE.md](RECIPE.md) describes the mod for an agent that builds it from scratch.

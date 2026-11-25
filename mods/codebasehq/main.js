@@ -38,6 +38,8 @@ const SHOWN = 60;         // cards drawn at a time: All projects can load hundre
 const ALL = "*";          // the "project" that means every active project
 const PARALLEL = 8;       // requests at a time when asking every project
 const PROJECTS_DIR = "~/Sites"; // the default project folder: clones go there, checkouts are looked for there
+const BUTTON_LABEL = "CodebaseHQ"; // the tab bar's button for this panel; the tab-bar mod reads shared(LABEL)
+const LABEL = "codebasehq.label";
 const REFRESH_ALL = 600000; // all projects means one request per project: refresh by itself less often
 const NOTICE = 20000;     // look for tickets changed elsewhere (Claude, Codebase's web UI): one request
 
@@ -121,6 +123,10 @@ export default class Tickets extends View {
     try { this.projectsDir = localStorage.getItem("projectsDir") || PROJECTS_DIR; } catch { this.projectsDir = PROJECTS_DIR; }
     this.projectsDirInput = InputState.new({ placeholder: PROJECTS_DIR });
     this.projectsDirInput.on("submit", (_e, cx) => this.save(cx));
+    try { this.buttonLabel = localStorage.getItem("buttonLabel") || BUTTON_LABEL; } catch { this.buttonLabel = BUTTON_LABEL; }
+    if (!checking() && (shared(LABEL) ?? BUTTON_LABEL) !== this.buttonLabel) setShared(LABEL, this.buttonLabel);
+    this.buttonLabelInput = InputState.new({ placeholder: BUTTON_LABEL });
+    this.buttonLabelInput.on("submit", (_e, cx) => this.save(cx));
     // The New ticket form.
     this.draft = null;          // { project, projectName, status, priority, type, category, assignee, menu, saving, error }
     this.summary = InputState.new({ placeholder: "Subject" });
@@ -894,6 +900,7 @@ export default class Tickets extends View {
     this.key.set_value("");
     this.base.set_value(this.baseUrl ?? "");
     this.projectsDirInput.set_value(this.projectsDir);
+    this.buttonLabelInput.set_value(this.buttonLabel === BUTTON_LABEL ? "" : this.buttonLabel);
     this.setupError = null;
     cx.notify();
   }
@@ -908,6 +915,7 @@ export default class Tickets extends View {
     try { base = normalizeBase(this.base.value()); } catch (e) { this.setupError = errText(e); cx.notify(); return; }
     const projectsDir = this.projectsDirInput.value().trim().replace(/(.)\/+$/, "$1") || PROJECTS_DIR;
     if (!/^(\/|~\/|~$)/.test(projectsDir)) { this.setupError = "Give the project folder as a full path, or one starting with ~/."; cx.notify(); return; }
+    const buttonLabel = this.buttonLabelInput.value().trim().replace(/\s+/g, " ") || BUTTON_LABEL;
     if (this.saving) return;
     this.saving = true;
     this.setupError = null;
@@ -919,6 +927,9 @@ export default class Tickets extends View {
         setShared("codebasehq.base", base);
         this.projectsDir = projectsDir;
         try { if (projectsDir !== PROJECTS_DIR) localStorage.setItem("projectsDir", projectsDir); else localStorage.removeItem("projectsDir"); } catch {}
+        this.buttonLabel = buttonLabel;
+        try { if (buttonLabel !== BUTTON_LABEL) localStorage.setItem("buttonLabel", buttonLabel); else localStorage.removeItem("buttonLabel"); } catch {}
+        setShared(LABEL, buttonLabel);
         const changed = !this.creds || this.creds.user !== user || this.creds.key !== key;
         if (changed) {
           await saveCredentials(user, key);
@@ -1408,6 +1419,9 @@ export default class Tickets extends View {
         .child(label("Default project folder"))
         .child(input(this.projectsDirInput))
         .child(hint(`Where projects are cloned, and where checkouts are looked for. Empty: ${PROJECTS_DIR}.`))
+        .child(label("Button name"))
+        .child(input(this.buttonLabelInput))
+        .child(hint(`The name of this panel's button in the tab bar. Empty: ${BUTTON_LABEL}.`))
         .when(Boolean(this.setupError), (el) => el.child(div().pt(10).text_size(12).text_color(t.ansi1).child(this.setupError)))
         .child(h_flex().pt(16).gap(8)
           .child(this.button(t, "save", this.saving ? "Saving…" : "Save", (cx) => this.save(cx), true))
