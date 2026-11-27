@@ -96,8 +96,10 @@ export function optionsMenu(t, { id, kind, meta, picked, now = picked, person, p
   if (!meta || meta.loading || meta.error) {
     return box.child(div().p(8).text_size(12).text_color(meta?.error ? t.ansi1 : t.dim).child(meta?.error ?? "Loading…"));
   }
-  return box.child(v_flex().id(`${id}-options`).max_h(220).overflow_y_scrollbar().children((meta[FIELDS[kind].list] ?? []).map((o) =>
-    h_flex().id(`${id}-${o.id ?? "none"}`).h(26).px(6).gap(8).rounded(5).items_center().text_size(12).cursor_pointer()
+  const list = meta[FIELDS[kind].list] ?? [];
+  // A scroll area needs a definite height (a max height alone doesn't scroll): the rows', at most 220.
+  return box.child(v_flex().id(`${id}-options`).h(Math.min(220, list.length * 26)).overflow_y_scrollbar().children(list.map((o) =>
+    h_flex().id(`${id}-${o.id ?? "none"}`).flex_none().h(26).px(6).gap(8).rounded(5).items_center().text_size(12).cursor_pointer()
       .when((o.id ?? null) === picked, (el) => el.bg(t.selected)).hover((s) => s.bg(t.hover))
       .on_click((_e, cx) => pick(o, cx))
       .child(h_flex().w(18).flex_none().justify_center().child(fieldMark(t, kind, o, 12, person)))

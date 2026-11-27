@@ -1278,8 +1278,8 @@ export default class Tickets extends View {
           .when(kind === "project", (el) => el.child(div().p(2).child(Input.new(this.draftFilter).h(28).px(8).rounded(6).border(1)
             .border_color(t.input).bg(t.background).text_size(12).text_color(t.foreground))))
           .when(!list, (el) => el.child(this.note(t, kind === "project" ? (this.projectError ?? "Loading projects…") : (meta?.error ?? "Loading…"))))
-          .when(Boolean(list), (el) => el.child(v_flex().id(`new-${kind}-options`).max_h(240).overflow_y_scrollbar().children(list.map((o) =>
-            h_flex().id(`new-${kind}-${o.id ?? "none"}`).h(28).px(6).gap(8).rounded(5).items_center().text_size(12)
+          .when(Boolean(list), (el) => el.child(v_flex().id(`new-${kind}-options`).h(Math.min(240, list.length * 28)).overflow_y_scrollbar().children(list.map((o) =>
+            h_flex().id(`new-${kind}-${o.id ?? "none"}`).flex_none().h(28).px(6).gap(8).rounded(5).items_center().text_size(12)
               .when(kind === "project" ? o.id === d.project : (value?.id ?? null) === (o.id ?? null), (el) => el.bg(t.selected))
               .hover((s) => s.bg(t.hover))
               .on_click((_e, cx) => {

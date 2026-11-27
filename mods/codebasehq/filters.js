@@ -88,8 +88,8 @@ export function filterBar(t, o) {
         .when(kind !== "resolution" && f[kind]?.length > 0, (el) => el.child(link("clear", "Any", (cx) => o.set({ ...f, [kind]: [] }, cx))))
         .child(link("done", "Done", (cx) => o.setOpen(null, cx))))
       .when(!options, (el) => el.child(div().p(10).text_size(12).text_color(meta?.error ? t.ansi1 : t.dim).child(meta?.error ?? "Loading…")))
-      .when(Boolean(options), (el) => el.child(v_flex().id(`${o.id}-options`).max_h(260).overflow_y_scrollbar().children(options.map((x) =>
-        h_flex().id(`${o.id}-opt-${kind}-${x.value}`).h(26).px(6).gap(8).rounded(5).items_center().text_size(12)
+      .when(Boolean(options), (el) => el.child(v_flex().id(`${o.id}-options`).h(Math.min(260, options.length * 26)).overflow_y_scrollbar().children(options.map((x) =>
+        h_flex().id(`${o.id}-opt-${kind}-${x.value}`).flex_none().h(26).px(6).gap(8).rounded(5).items_center().text_size(12)
           .hover((s) => s.bg(t.hover)).on_click((_e, cx) => pick(x, cx))
           .child(div().size(14).flex_none().rounded(kind === "resolution" ? 7 : 3).border(1)
             .border_color(x.on ? t.accent : t.input).bg(x.on ? t.accent : t.background)
