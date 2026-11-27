@@ -34,3 +34,36 @@ check("… others' most recently updated first", asked[1]?.includes("assignee:me
   await repositories({ user: "a/b", key: "k" }, "shop");
   check("… and again after a reload or another account", asked.filter((u) => u.includes("/shop/repositories")).length === 2);
 }
+// Disabled people aren't offered: the project's people don't say who is, the account's do.
+{
+  const { choices, forgetRemembered } = await import("../mods/codebasehq/codebase.js");
+  forgetRemembered();
+  const answers = {
+    "/shop/assignments": [{ user: { id: 1, first_name: "Anna", username: "anna" } }, { user: { id: 2, first_name: "Bo", username: "bo" } }],
+    "/users": [{ user: { id: 1, enabled: true } }, { user: { id: 2, enabled: false } }, { user: { id: 3, enabled: false } }],
+  };
+  const saved = globalThis.fetch;
+  asked.length = 0;
+  globalThis.fetch = async (url) => {
+    const path = new URL(String(url)).pathname;
+    asked.push(path);
+    const body = JSON.stringify(answers[path] ?? []);
+    return { ok: true, status: 200, json: async () => JSON.parse(body), text: async () => body };
+  };
+  const creds = { user: "a/b", key: "k" };
+  const c = await choices(creds, "shop");
+  check("disabled people are left out of the project's people", c.users.map((u) => u.username ?? u.name).join() === "Unassigned,anna", c.users);
+  await choices(creds, "shop");
+  check("… and the account's people are asked for once in a while, not per project", asked.filter((p) => p === "/users").length === 1, asked);
+  globalThis.fetch = async (url) => {
+    const path = new URL(String(url)).pathname;
+    if (path === "/users") return { ok: false, status: 500, text: async () => "" };
+    const body = JSON.stringify(answers[path] ?? []);
+    return { ok: true, status: 200, json: async () => JSON.parse(body), text: async () => body };
+  };
+  forgetRemembered();
+  const all = await choices(creds, "shop");
+  check("… everyone on the project is shown if the account's people can't be read", all.users.length === 3, all.users);
+  globalThis.fetch = saved;
+  forgetRemembered();
+}

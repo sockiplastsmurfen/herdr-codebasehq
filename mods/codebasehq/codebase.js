@@ -130,19 +130,21 @@ export async function ticketPage(creds, project, search, page, order = "updated"
 /**
  * What a ticket's fields can be set to in this project, each a list of {id, name, colour?}:
  * statuses (by order, with closed), priorities (by position), types, categories,
- * users (the people on the project, "Unassigned" first) and milestones (the open ones, "None"
- * first; none at all if they can't be read). allMilestones: every milestone, finished ones too
+ * users (the people on the project whose accounts are enabled, "Unassigned" first) and
+ * milestones (the open ones, "None" first; none at all if they can't be read). allMilestones: every milestone, finished ones too
  * (with done), for the filters: closed tickets are often in them.
  */
 export async function choices(creds, project) {
   const base = `/${encodeURIComponent(project)}`;
-  const [st, pr, ty, ca, us, ms] = await Promise.all([
+  const [st, pr, ty, ca, us, ms, off] = await Promise.all([
     get(creds, `${base}/tickets/statuses`),
     get(creds, `${base}/tickets/priorities`),
     get(creds, `${base}/tickets/types`),
     get(creds, `${base}/tickets/categories`),
     get(creds, `${base}/assignments`),
     get(creds, `${base}/milestones`).catch(() => null),
+    // If the account's people can't be read, everyone on the project is shown.
+    disabledUsers(creds).catch(() => new Set()),
   ]);
   const rows = (list, key) => (list ?? []).map((r) => r[key] ?? r);
   const byName = (a, b) => a.name.localeCompare(b.name, "sv");
@@ -156,12 +158,21 @@ export async function choices(creds, project) {
       .map((x) => ({ id: x.id, name: x.name, colour: x.colour, isDefault: Boolean(x.default), position: x.position ?? null })),
     types: rows(ty, "ticketing_type").map((x) => ({ id: x.id, name: x.name, icon: x.icon ?? null })),
     categories: rows(ca, "ticketing_category").map((x) => ({ id: x.id, name: x.name })).sort(byName),
-    users: [{ id: null, name: "Unassigned" }, ...rows(us, "user")
+    users: [{ id: null, name: "Unassigned" }, ...rows(us, "user").filter((x) => !off.has(x.id))
       .map((x) => ({ id: x.id, name: [x.first_name, x.last_name].filter(Boolean).join(" ") || x.username, username: x.username }))
       .sort(byName)],
     milestones: [{ id: null, name: "None" }, ...allMilestones.filter((x) => !x.done)],
     allMilestones,
   };
+}
+
+/**
+ * The ids of the people whose Codebase accounts are disabled. The project's people
+ * (assignments) don't say so, only the account's do. Kept a while: one answer serves every project.
+ */
+function disabledUsers(creds) {
+  return remember(`${creds.user}|disabled`, 10 * MINUTES, async () => new Set(((await get(creds, "/users")) ?? [])
+    .map((r) => r.user ?? r).filter((u) => u.enabled === false).map((u) => u.id)));
 }
 
 /** One ticket, with who reported it, its milestone and when it was made. */
